@@ -207,14 +207,14 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     },
     [state.tracks]
   );
-  const play = useCallback(
-    () => dispatch({ type: "SET_PLAYING", isPlaying: true }),
-    []
-  );
-  const pause = useCallback(
-    () => dispatch({ type: "SET_PLAYING", isPlaying: false }),
-    []
-  );
+  const play = useCallback(() => {
+    dispatch({ type: "SET_PLAYING", isPlaying: true });
+    widgetRef.current?.play();
+  }, []);
+  const pause = useCallback(() => {
+    dispatch({ type: "SET_PLAYING", isPlaying: false });
+    widgetRef.current?.pause();
+  }, []);
   const next = useCallback(() => dispatch({ type: "NEXT" }), []);
   const previous = useCallback(() => dispatch({ type: "PREVIOUS" }), []);
   const setVolume = useCallback(

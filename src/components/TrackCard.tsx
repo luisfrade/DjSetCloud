@@ -10,8 +10,17 @@ interface TrackCardProps {
 }
 
 export default function TrackCard({ track, index }: TrackCardProps) {
-  const { state, playIndex } = usePlayer();
+  const { state, playIndex, play } = usePlayer();
   const isActive = state.currentIndex === index;
+
+  const handleClick = () => {
+    if (isActive && !state.isPlaying) {
+      // Resume the current track instead of reloading it
+      play();
+    } else if (!isActive) {
+      playIndex(index);
+    }
+  };
 
   const artworkUrl = track.artwork_url
     ? track.artwork_url.replace("-large", "-t200x200")
@@ -19,7 +28,7 @@ export default function TrackCard({ track, index }: TrackCardProps) {
 
   return (
     <button
-      onClick={() => playIndex(index)}
+      onClick={handleClick}
       className={`w-full flex items-center gap-4 p-4 rounded-lg transition-all text-left
         ${
           isActive

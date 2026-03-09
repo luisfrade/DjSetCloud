@@ -165,17 +165,16 @@ export default function SoundCloudWidget() {
     };
   }, [sharedWidgetRef]);
 
-  // Sync play/pause from user controls
+  // Sync play/pause from user controls — call widget directly, no async isPaused check
   useEffect(() => {
     if (!sharedWidgetRef.current || !widgetInitializedRef.current || !currentTrack) return;
+    if (isLoadingTrackRef.current) return;
 
-    sharedWidgetRef.current.isPaused((paused: boolean) => {
-      if (state.isPlaying && paused) {
-        sharedWidgetRef.current?.play();
-      } else if (!state.isPlaying && !paused) {
-        sharedWidgetRef.current?.pause();
-      }
-    });
+    if (state.isPlaying) {
+      sharedWidgetRef.current.play();
+    } else {
+      sharedWidgetRef.current.pause();
+    }
   }, [state.isPlaying, currentTrack, sharedWidgetRef]);
 
   return (
