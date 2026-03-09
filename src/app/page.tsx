@@ -1,65 +1,132 @@
-import Image from "next/image";
+"use client";
+
+import { useEffect, useRef, useState, useCallback } from "react";
+import { usePlayer } from "@/context/PlayerContext";
+import { TracksResponse } from "@/types";
+import Feed from "@/components/Feed";
+import Player from "@/components/Player";
+import SoundCloudWidget from "@/components/SoundCloudWidget";
 
 export default function Home() {
+  const { setTracks, appendTracks, refreshTracks, playIndex, setError, setIsLoading } =
+    usePlayer();
+  const [nextOffset, setNextOffset] = useState<number | null>(null);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const initialFetchDone = useRef(false);
+
+  // Fetch initial tracks
+  useEffect(() => {
+    if (initialFetchDone.current) return;
+    initialFetchDone.current = true;
+
+    setIsLoading(true);
+
+    fetch("/api/tracks")
+      .then((res) => {
+        if (!res.ok) throw new Error("Failed to load tracks");
+        return res.json();
+      })
+      .then((data: TracksResponse) => {
+        setTracks(data.tracks);
+        setNextOffset(data.nextOffset);
+        // Auto-play: random track if shuffle on, otherwise first (newest)
+        if (data.tracks.length > 0) {
+          const shuffle = localStorage.getItem("djsetcloud-shuffle");
+          const isShuffleOn = shuffle === null ? true : shuffle === "true";
+          const startIndex = isShuffleOn
+            ? Math.floor(Math.random() * data.tracks.length)
+            : 0;
+          playIndex(startIndex);
+        }
+      })
+      .catch((err) => {
+        setError(err.message || "Failed to load tracks");
+      });
+  }, [setTracks, playIndex, setError, setIsLoading]);
+
+  const handleRefresh = useCallback(() => {
+    if (isRefreshing) return;
+    setIsRefreshing(true);
+    fetch("/api/tracks")
+      .then((res) => {
+        if (!res.ok) throw new Error("Failed to refresh");
+        return res.json();
+      })
+      .then((data: TracksResponse) => {
+        refreshTracks(data.tracks);
+        setNextOffset(data.nextOffset);
+      })
+      .catch((err) => {
+        console.error("Failed to refresh:", err);
+      })
+      .finally(() => {
+        setIsRefreshing(false);
+      });
+  }, [isRefreshing, refreshTracks]);
+
+  const handleLoadMore = useCallback(() => {
+    if (nextOffset === null || isLoadingMore) return;
+
+    setIsLoadingMore(true);
+    fetch(`/api/tracks?offset=${nextOffset}`)
+      .then((res) => {
+        if (!res.ok) throw new Error("Failed to load more tracks");
+        return res.json();
+      })
+      .then((data: TracksResponse) => {
+        appendTracks(data.tracks);
+        setNextOffset(data.nextOffset);
+      })
+      .catch((err) => {
+        console.error("Failed to load more:", err);
+      })
+      .finally(() => {
+        setIsLoadingMore(false);
+      });
+  }, [nextOffset, isLoadingMore, appendTracks]);
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
+    <div className="flex flex-col h-screen bg-gray-950">
+      {/* Header */}
+      <header className="flex-shrink-0 border-b border-white/10 px-4 py-4">
+        <div className="max-w-3xl mx-auto flex items-center gap-3">
+          <div className="w-9 h-9 bg-blue-500 rounded-full flex items-center justify-center shadow-lg shadow-blue-500/30">
+            <svg
+              className="w-7 h-7 text-white animate-[spin_3s_linear_infinite]"
+              viewBox="0 0 24 24"
+              fill="none"
             >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+              {/* Outer ring */}
+              <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="1.5" fill="none" />
+              {/* Grooves */}
+              <circle cx="12" cy="12" r="7.5" stroke="currentColor" strokeWidth="0.5" strokeOpacity="0.5" fill="none" />
+              <circle cx="12" cy="12" r="5" stroke="currentColor" strokeWidth="0.5" strokeOpacity="0.5" fill="none" />
+              {/* Center label */}
+              <circle cx="12" cy="12" r="3" fill="currentColor" fillOpacity="0.3" />
+              {/* Center hole */}
+              <circle cx="12" cy="12" r="1.2" fill="currentColor" />
+            </svg>
+          </div>
+          <h1 className="text-xl font-bold text-white">DjSetCloud</h1>
+          <span className="text-xs text-white/30 ml-auto">
+            Afro House / House / Techno / Tech House
+          </span>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
+      </header>
+
+      {/* Feed */}
+      <Feed
+        onLoadMore={handleLoadMore}
+        hasMore={nextOffset !== null}
+        isLoadingMore={isLoadingMore}
+      />
+
+      {/* Player */}
+      <Player onRefresh={handleRefresh} isRefreshing={isRefreshing} />
+
+      {/* Hidden SoundCloud Widget */}
+      <SoundCloudWidget />
     </div>
   );
 }
