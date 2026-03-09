@@ -8,6 +8,7 @@ export default function SoundCloudWidget() {
     state,
     widgetRef: sharedWidgetRef,
     volumeRef,
+    loadedUrlRef,
     currentTrack,
     next,
     setIsPlaying,
@@ -16,7 +17,6 @@ export default function SoundCloudWidget() {
   } = usePlayer();
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
-  const loadedTrackUrlRef = useRef<string | null>(null);
   const scriptLoadedRef = useRef(false);
   const widgetInitializedRef = useRef(false);
   const consecutiveErrorsRef = useRef(0);
@@ -52,7 +52,7 @@ export default function SoundCloudWidget() {
   // Initialize widget and load track when currentTrack changes
   useEffect(() => {
     if (!currentTrack || !iframeRef.current) return;
-    if (loadedTrackUrlRef.current === currentTrack.permalink_url) return;
+    if (loadedUrlRef.current === currentTrack.permalink_url) return;
 
     const waitForScript = () => {
       if (!scriptLoadedRef.current || !window.SC) {
@@ -71,7 +71,7 @@ export default function SoundCloudWidget() {
           const widget = window.SC.Widget(iframeRef.current!);
           sharedWidgetRef.current = widget;
           widgetInitializedRef.current = true;
-          loadedTrackUrlRef.current = currentTrack.permalink_url;
+          loadedUrlRef.current = currentTrack.permalink_url;
           isLoadingTrackRef.current = false;
 
           const events = window.SC.Widget.Events;
@@ -120,7 +120,7 @@ export default function SoundCloudWidget() {
         iframeRef.current!.addEventListener("load", onIframeLoad);
       } else if (sharedWidgetRef.current) {
         // Widget already initialized, just load new track
-        loadedTrackUrlRef.current = currentTrack.permalink_url;
+        loadedUrlRef.current = currentTrack.permalink_url;
         isLoadingTrackRef.current = true;
 
         sharedWidgetRef.current.load(currentTrack.permalink_url, {
@@ -144,12 +144,10 @@ export default function SoundCloudWidget() {
   // On first user interaction, try to start playback if browser blocked autoplay
   useEffect(() => {
     const tryPlay = () => {
+      // Call play() synchronously within the gesture handler for iOS compatibility.
+      // iOS requires audio to start within a direct user gesture — no async callbacks.
       if (sharedWidgetRef.current && widgetInitializedRef.current) {
-        sharedWidgetRef.current.isPaused((paused: boolean) => {
-          if (paused) {
-            sharedWidgetRef.current?.play();
-          }
-        });
+        sharedWidgetRef.current.play();
       }
       document.removeEventListener("click", tryPlay);
       document.removeEventListener("keydown", tryPlay);

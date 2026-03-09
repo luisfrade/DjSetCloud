@@ -148,6 +148,7 @@ interface PlayerContextValue {
   state: PlayerState;
   widgetRef: MutableRefObject<SCWidgetInstance | null>;
   volumeRef: MutableRefObject<number>;
+  loadedUrlRef: MutableRefObject<string | null>;
   setTracks: (tracks: Track[]) => void;
   appendTracks: (tracks: Track[]) => void;
   refreshTracks: (tracks: Track[]) => void;
@@ -174,9 +175,12 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(playerReducer, initialState);
   const widgetRef = useRef<SCWidgetInstance | null>(null);
   const volumeRef = useRef(initialState.volume);
+  const tracksRef = useRef(state.tracks);
+  const loadedUrlRef = useRef<string | null>(null);
 
-  // Keep volumeRef in sync
+  // Keep refs in sync
   volumeRef.current = state.volume;
+  tracksRef.current = state.tracks;
 
   // Load shuffle from localStorage on mount
   useEffect(() => {
@@ -197,7 +201,24 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     []
   );
   const playIndex = useCallback(
-    (index: number) => dispatch({ type: "PLAY_INDEX", index }),
+    (index: number) => {
+      dispatch({ type: "PLAY_INDEX", index });
+      // Load track directly on widget within the gesture handler for iOS compatibility.
+      // iOS Safari requires audio to be initiated synchronously within a user gesture.
+      const track = tracksRef.current[index];
+      if (track && widgetRef.current) {
+        loadedUrlRef.current = track.permalink_url;
+        widgetRef.current.load(track.permalink_url, {
+          auto_play: true,
+          callback: () => {
+            widgetRef.current?.setVolume(volumeRef.current);
+            widgetRef.current?.getDuration((d: number) => {
+              dispatch({ type: "SET_DURATION", duration: d });
+            });
+          },
+        });
+      }
+    },
     []
   );
   const playTrack = useCallback(
@@ -268,6 +289,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         state,
         widgetRef,
         volumeRef,
+        loadedUrlRef,
         setTracks,
         appendTracks,
         refreshTracks,
