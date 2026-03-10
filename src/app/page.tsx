@@ -6,6 +6,7 @@ import { TracksResponse } from "@/types";
 import Feed from "@/components/Feed";
 import Player from "@/components/Player";
 import SoundCloudWidget from "@/components/SoundCloudWidget";
+import ClockOverlay from "@/components/ClockOverlay";
 
 export default function Home() {
   const { setTracks, appendTracks, refreshTracks, playIndex, setError, setIsLoading } =
@@ -13,6 +14,7 @@ export default function Home() {
   const [nextOffset, setNextOffset] = useState<number | null>(null);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [showClock, setShowClock] = useState(false);
   const initialFetchDone = useRef(false);
 
   // Fetch initial tracks
@@ -123,10 +125,17 @@ export default function Home() {
       />
 
       {/* Player */}
-      <Player onRefresh={handleRefresh} isRefreshing={isRefreshing} />
+      <Player
+        onRefresh={handleRefresh}
+        isRefreshing={isRefreshing}
+        onClockToggle={() => setShowClock(true)}
+      />
 
       {/* Hidden SoundCloud Widget */}
       <SoundCloudWidget />
+
+      {/* Clock overlay */}
+      {showClock && <ClockOverlay onClose={() => setShowClock(false)} />}
     </div>
   );
 }

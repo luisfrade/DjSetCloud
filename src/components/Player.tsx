@@ -7,9 +7,10 @@ import { formatTime } from "@/lib/formatters";
 interface PlayerProps {
   onRefresh?: () => void;
   isRefreshing?: boolean;
+  onClockToggle?: () => void;
 }
 
-export default function Player({ onRefresh, isRefreshing }: PlayerProps) {
+export default function Player({ onRefresh, isRefreshing, onClockToggle }: PlayerProps) {
   const { state, currentTrack, play, pause, next, previous, seekTo, setShuffle } =
     usePlayer();
   const progressBarRef = useRef<HTMLDivElement>(null);
@@ -148,6 +149,27 @@ export default function Player({ onRefresh, isRefreshing }: PlayerProps) {
         <div className="hidden sm:block text-xs text-white/40 tabular-nums w-24 text-center">
           {formatTime(currentTime)} / {formatTime(state.duration)}
         </div>
+
+        {/* Clock mode */}
+        {onClockToggle && (
+          <button
+            onClick={onClockToggle}
+            className="p-2 text-white/30 hover:text-blue-400 transition-colors"
+            aria-label="Clock mode"
+            title="Clock mode"
+          >
+            <svg
+              className="w-5 h-5"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+              strokeWidth={2}
+            >
+              <circle cx="12" cy="12" r="10" />
+              <polyline points="12 6 12 12 16 14" />
+            </svg>
+          </button>
+        )}
 
         {/* Shuffle */}
         <button

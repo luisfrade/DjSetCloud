@@ -3,6 +3,7 @@
 import { Track } from "@/types";
 import { formatDuration, formatDate } from "@/lib/formatters";
 import { usePlayer } from "@/context/PlayerContext";
+import { unlockAudioSession } from "@/lib/audioUnlock";
 
 interface TrackCardProps {
   track: Track;
@@ -14,6 +15,8 @@ export default function TrackCard({ track, index }: TrackCardProps) {
   const isActive = state.currentIndex === index;
 
   const handleClick = () => {
+    // Unlock iOS audio session synchronously inside the gesture handler
+    unlockAudioSession();
     if (isActive) {
       // Same track — always call play() to ensure widget plays
       play();
