@@ -282,11 +282,20 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 
   /* ---- Simple dispatchers ---- */
   const setTracks = useCallback(
-    (tracks: Track[]) => dispatch({ type: "SET_TRACKS", tracks }),
+    (tracks: Track[]) => {
+      // Update ref eagerly so that a playIndex() call in the same
+      // synchronous block (e.g. page.tsx auto-play) can read the new tracks
+      // before React re-renders and syncs the ref.
+      tracksRef.current = tracks;
+      dispatch({ type: "SET_TRACKS", tracks });
+    },
     []
   );
   const appendTracks = useCallback(
-    (tracks: Track[]) => dispatch({ type: "APPEND_TRACKS", tracks }),
+    (tracks: Track[]) => {
+      tracksRef.current = [...tracksRef.current, ...tracks];
+      dispatch({ type: "APPEND_TRACKS", tracks });
+    },
     []
   );
   const refreshTracks = useCallback(
