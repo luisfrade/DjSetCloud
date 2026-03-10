@@ -1,9 +1,9 @@
 import { Track } from "@/types";
 
 const PIPED_INSTANCES = [
-  "https://pipedapi.kavin.rocks",
-  "https://pipedapi.adminforge.de",
-  "https://pipedapi.in.projectsegfau.lt",
+  "https://pipedapi.wireway.ch",
+  "https://pipedapi.osphost.fi",
+  "https://pipedapi.ngn.tf",
 ];
 
 interface PipedSearchItem {
@@ -26,25 +26,6 @@ interface PipedSearchResponse {
   corrected: boolean;
 }
 
-interface PipedStreamResponse {
-  audioStreams: Array<{
-    url: string;
-    mimeType: string;
-    quality: string;
-    bitrate: number;
-    contentLength: number;
-    codec: string;
-  }>;
-  title: string;
-  description: string;
-  uploadDate: string; // ISO-ish "YYYY-MM-DD"
-  uploader: string;
-  uploaderUrl: string;
-  uploaderAvatar: string;
-  thumbnailUrl: string;
-  duration: number; // seconds
-}
-
 /**
  * Try to fetch from multiple Piped instances with fallback.
  */
@@ -54,7 +35,7 @@ async function pipedFetch<T>(path: string): Promise<T> {
   for (const instance of PIPED_INSTANCES) {
     try {
       const res = await fetch(`${instance}${path}`, {
-        signal: AbortSignal.timeout(12000),
+        signal: AbortSignal.timeout(15000),
         headers: { Accept: "application/json" },
       });
       if (res.ok) {
@@ -80,7 +61,8 @@ const QUERIES = [
 const MIN_DURATION_SEC = 40 * 60; // 40 minutes
 
 /**
- * Fetch DJ sets from YouTube via Piped API.
+ * Fetch DJ sets from YouTube via Piped API (search only).
+ * Playback uses the YouTube IFrame Player API (client-side).
  */
 export async function fetchYouTubeTracks(): Promise<Track[]> {
   const results: Track[] = [];
@@ -134,39 +116,6 @@ export async function fetchYouTubeTracks(): Promise<Track[]> {
   }
 
   return results;
-}
-
-/**
- * Resolve a direct audio stream URL for a YouTube video via Piped.
- */
-export async function resolveYouTubeStreamUrl(
-  videoId: string
-): Promise<string> {
-  const data = await pipedFetch<PipedStreamResponse>(`/streams/${videoId}`);
-
-  const audioStreams = data.audioStreams || [];
-
-  if (audioStreams.length === 0) {
-    throw new Error(`No audio streams found for video ${videoId}`);
-  }
-
-  // Sort by bitrate descending (best quality first)
-  const sorted = [...audioStreams].sort(
-    (a, b) => (b.bitrate || 0) - (a.bitrate || 0)
-  );
-
-  // Prefer MP4/M4A audio for iOS Safari compatibility
-  const mp4Audio = sorted.find(
-    (s) =>
-      s.mimeType?.includes("audio/mp4") || s.mimeType?.includes("audio/m4a")
-  );
-  if (mp4Audio?.url) return mp4Audio.url;
-
-  // Fallback: any audio stream with a URL
-  const fallback = sorted.find((s) => !!s.url);
-  if (fallback?.url) return fallback.url;
-
-  throw new Error(`No usable audio stream for video ${videoId}`);
 }
 
 /**

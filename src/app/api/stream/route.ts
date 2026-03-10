@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { resolveSoundCloudStreamUrl } from "@/lib/soundcloud";
-import { resolveYouTubeStreamUrl } from "@/lib/youtube";
 
+/**
+ * Resolve a direct stream URL for a SoundCloud track.
+ * YouTube tracks use the IFrame Player API (client-side) and don't need this endpoint.
+ */
 export async function GET(request: NextRequest) {
   const id = request.nextUrl.searchParams.get("id");
 
@@ -12,34 +15,23 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  try {
-    let url: string;
+  if (!id.startsWith("sc-")) {
+    return NextResponse.json(
+      { error: "Only SoundCloud stream resolution is supported" },
+      { status: 400 }
+    );
+  }
 
-    if (id.startsWith("sc-")) {
-      const numericId = parseInt(id.slice(3), 10);
-      if (isNaN(numericId)) {
-        return NextResponse.json(
-          { error: "Invalid SoundCloud track ID" },
-          { status: 400 }
-        );
-      }
-      url = await resolveSoundCloudStreamUrl(numericId);
-    } else if (id.startsWith("yt-")) {
-      const videoId = id.slice(3);
-      if (!videoId) {
-        return NextResponse.json(
-          { error: "Invalid YouTube video ID" },
-          { status: 400 }
-        );
-      }
-      url = await resolveYouTubeStreamUrl(videoId);
-    } else {
+  try {
+    const numericId = parseInt(id.slice(3), 10);
+    if (isNaN(numericId)) {
       return NextResponse.json(
-        { error: "Invalid track ID format — expected sc-* or yt-*" },
+        { error: "Invalid SoundCloud track ID" },
         { status: 400 }
       );
     }
 
+    const url = await resolveSoundCloudStreamUrl(numericId);
     return NextResponse.json({ url });
   } catch (err) {
     console.error("Stream resolution failed for", id, ":", err);

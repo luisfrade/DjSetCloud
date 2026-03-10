@@ -44,3 +44,18 @@ export type PlayerAction =
   | { type: "SET_LOADING"; isLoading: boolean }
   | { type: "SET_ERROR"; error: string | null }
   | { type: "SET_SHUFFLE"; shuffle: boolean };
+
+/** Subset of YouTube IFrame Player API methods we use */
+export interface YTPlayer {
+  loadVideoById(videoId: string): void;
+  playVideo(): void;
+  pauseVideo(): void;
+  stopVideo(): void;
+  seekTo(seconds: number, allowSeekAhead: boolean): void;
+  setVolume(volume: number): void; // 0-100
+  getVolume(): number;
+  getCurrentTime(): number;
+  getDuration(): number;
+  getPlayerState(): number;
+  destroy(): void;
+}

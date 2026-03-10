@@ -6,6 +6,7 @@ import { TracksResponse } from "@/types";
 import Feed from "@/components/Feed";
 import Player from "@/components/Player";
 import ClockOverlay from "@/components/ClockOverlay";
+import YouTubePlayer from "@/components/YouTubePlayer";
 
 const REFRESH_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
 
@@ -172,6 +173,9 @@ export default function Home() {
         isRefreshing={isRefreshing}
         onClockToggle={() => setShowClock(true)}
       />
+
+      {/* YouTube IFrame Player (hidden) */}
+      <YouTubePlayer />
 
       {/* Clock overlay */}
       {showClock && <ClockOverlay onClose={() => setShowClock(false)} />}

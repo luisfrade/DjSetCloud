@@ -9,7 +9,7 @@ import {
   useEffect,
   type ReactNode,
 } from "react";
-import { Track, PlayerState, PlayerAction } from "@/types";
+import { Track, PlayerState, PlayerAction, YTPlayer } from "@/types";
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
@@ -155,6 +155,11 @@ interface PlayerContextValue {
   setError: (e: string | null) => void;
   setIsLoading: (b: boolean) => void;
   currentTrack: Track | null;
+  /* YouTube IFrame Player integration */
+  onYTReady: (player: YTPlayer) => void;
+  onYTStateChange: (ytState: number) => void;
+  onYTError: () => void;
+  onYTProgress: (currentTime: number, duration: number) => void;
 }
 
 const PlayerContext = createContext<PlayerContextValue | null>(null);
@@ -168,8 +173,10 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 
   /* ---- refs ---- */
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const gainNodeRef = useRef<GainNode | null>(null);
-  const audioCtxRef = useRef<AudioContext | null>(null);
+  const ytPlayerRef = useRef<YTPlayer | null>(null);
+  const activeEngineRef = useRef<"audio" | "youtube">("audio");
+  const pendingYTLoadRef = useRef<string | null>(null);
+
   const tracksRef = useRef(state.tracks);
   const stateRef = useRef(state);
   const volumeRef = useRef(initialState.volume);
@@ -181,42 +188,19 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   stateRef.current = state;
   volumeRef.current = state.volume;
 
-  /* ---- Create Audio element + Web Audio gain node (once) ---- */
+  /* ---- Create Audio element (once) ---- */
+  /* NO crossOrigin, NO Web Audio API / createMediaElementSource.       */
+  /* This fixes iOS Safari where AudioContext starts suspended and      */
+  /* blocks all audio routed through it.                                */
   useEffect(() => {
     const audio = new Audio();
     audio.preload = "auto";
-    // crossOrigin needed for Web Audio API createMediaElementSource
-    audio.crossOrigin = "anonymous";
     audioRef.current = audio;
-
-    // Set up Web Audio API for software volume control (iOS needs this)
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const AudioCtx =
-        window.AudioContext || (window as any).webkitAudioContext;
-      if (AudioCtx) {
-        const ctx = new AudioCtx();
-        const source = ctx.createMediaElementSource(audio);
-        const gain = ctx.createGain();
-        source.connect(gain);
-        gain.connect(ctx.destination);
-
-        audioCtxRef.current = ctx;
-        gainNodeRef.current = gain;
-        gain.gain.value = volumeRef.current / 100;
-      }
-    } catch (err) {
-      console.warn(
-        "Web Audio setup failed — falling back to audio.volume:",
-        err
-      );
-    }
-
-    // Fallback volume for non-iOS browsers
     audio.volume = volumeRef.current / 100;
 
     /* ---- Audio event listeners ---- */
     const onTimeUpdate = () => {
+      if (activeEngineRef.current !== "audio") return;
       if (audio.duration > 0 && isFinite(audio.duration)) {
         dispatch({
           type: "SET_PROGRESS",
@@ -226,6 +210,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     };
 
     const onDurationChange = () => {
+      if (activeEngineRef.current !== "audio") return;
       if (audio.duration > 0 && isFinite(audio.duration)) {
         dispatch({
           type: "SET_DURATION",
@@ -235,11 +220,13 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     };
 
     const onPlay = () => {
+      if (activeEngineRef.current !== "audio") return;
       consecutiveErrorsRef.current = 0;
       dispatch({ type: "SET_PLAYING", isPlaying: true });
     };
 
     const onPause = () => {
+      if (activeEngineRef.current !== "audio") return;
       // Ignore pause events while we're resolving a new stream
       if (!isResolvingRef.current) {
         dispatch({ type: "SET_PLAYING", isPlaying: false });
@@ -247,10 +234,12 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     };
 
     const onEnded = () => {
+      if (activeEngineRef.current !== "audio") return;
       nextRef.current();
     };
 
     const onError = () => {
+      if (activeEngineRef.current !== "audio") return;
       if (!audio.src || audio.src === "") return; // ignore empty src errors
       console.error("Audio playback error:", audio.error?.message);
       consecutiveErrorsRef.current += 1;
@@ -281,7 +270,6 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       audio.removeEventListener("error", onError);
       audio.pause();
       audio.src = "";
-      audioCtxRef.current?.close();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -326,15 +314,18 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     []
   );
 
-  /* ---- Volume ---- */
+  /* ---- Volume — update both engines ---- */
   const setVolume = useCallback((volume: number) => {
     dispatch({ type: "SET_VOLUME", volume });
-    const v = volume / 100;
-    if (gainNodeRef.current) {
-      gainNodeRef.current.gain.value = v;
-    }
+    // HTML5 Audio uses 0–1 range
     if (audioRef.current) {
-      audioRef.current.volume = v;
+      audioRef.current.volume = volume / 100;
+    }
+    // YT Player uses 0–100 range
+    try {
+      ytPlayerRef.current?.setVolume(volume);
+    } catch {
+      /* player not ready */
     }
   }, []);
 
@@ -346,63 +337,104 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  /* ---- Seek (fraction 0–1) ---- */
+  /* ---- Seek (fraction 0–1) — route to active engine ---- */
   const seekTo = useCallback((fraction: number) => {
-    const audio = audioRef.current;
-    if (audio && audio.duration > 0 && isFinite(audio.duration)) {
-      audio.currentTime = fraction * audio.duration;
+    if (activeEngineRef.current === "youtube") {
+      const ytp = ytPlayerRef.current;
+      if (ytp) {
+        try {
+          const dur = ytp.getDuration();
+          if (dur > 0) ytp.seekTo(fraction * dur, true);
+        } catch {
+          /* not ready */
+        }
+      }
+    } else {
+      const audio = audioRef.current;
+      if (audio && audio.duration > 0 && isFinite(audio.duration)) {
+        audio.currentTime = fraction * audio.duration;
+      }
     }
   }, []);
 
-  /* ---- Resume AudioContext (required on iOS before playback) ---- */
-  const resumeAudioContext = useCallback(() => {
-    if (audioCtxRef.current?.state === "suspended") {
-      audioCtxRef.current.resume();
-    }
-  }, []);
-
-  /* ---- Core: resolve stream URL & play ---- */
+  /* ---- Core: load track on the correct engine ---- */
   const loadAndPlay = useCallback(async (track: Track) => {
-    const audio = audioRef.current;
-    if (!audio) return;
-
     isResolvingRef.current = true;
 
-    try {
-      const res = await fetch(
-        `/api/stream?id=${encodeURIComponent(track.id)}`
-      );
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(
-          (data as { error?: string }).error ||
-            `Stream resolution HTTP ${res.status}`
+    if (track.source === "youtube") {
+      /* ---- YouTube: use IFrame Player ---- */
+
+      // Stop the HTML5 Audio engine
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current.src = "";
+      }
+      activeEngineRef.current = "youtube";
+
+      const videoId = track.id.replace("yt-", "");
+      const ytp = ytPlayerRef.current;
+
+      if (ytp) {
+        try {
+          ytp.setVolume(volumeRef.current);
+          ytp.loadVideoById(videoId);
+        } catch {
+          isResolvingRef.current = false;
+          dispatch({ type: "SET_PLAYING", isPlaying: false });
+        }
+      } else {
+        // YT player not ready yet — queue for when onYTReady fires
+        pendingYTLoadRef.current = videoId;
+      }
+    } else {
+      /* ---- SoundCloud: use HTML5 Audio ---- */
+
+      // Stop the YT engine
+      try {
+        ytPlayerRef.current?.pauseVideo();
+      } catch {
+        /* ignore */
+      }
+      activeEngineRef.current = "audio";
+
+      const audio = audioRef.current;
+      if (!audio) {
+        isResolvingRef.current = false;
+        return;
+      }
+
+      try {
+        const res = await fetch(
+          `/api/stream?id=${encodeURIComponent(track.id)}`
         );
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(
+            (data as { error?: string }).error ||
+              `Stream resolution HTTP ${res.status}`
+          );
+        }
+        const data = await res.json();
+        if (!data.url) throw new Error("Empty stream URL");
+
+        audio.src = data.url;
+        audio.volume = volumeRef.current / 100;
+
+        isResolvingRef.current = false;
+
+        await audio.play();
+      } catch (err) {
+        isResolvingRef.current = false;
+        console.warn("loadAndPlay failed:", err);
+        dispatch({ type: "SET_PLAYING", isPlaying: false });
+        throw err; // let caller handle
       }
-      const data = await res.json();
-      if (!data.url) throw new Error("Empty stream URL");
-
-      audio.src = data.url;
-      audio.volume = volumeRef.current / 100;
-      if (gainNodeRef.current) {
-        gainNodeRef.current.gain.value = volumeRef.current / 100;
-      }
-
-      isResolvingRef.current = false;
-
-      await audio.play();
-    } catch (err) {
-      isResolvingRef.current = false;
-      console.warn("loadAndPlay failed:", err);
-      dispatch({ type: "SET_PLAYING", isPlaying: false });
-      throw err; // let caller handle
     }
   }, []);
 
   /* ---- playIndex (user gesture → load + play) ---- */
   const playIndex = useCallback(
     async (index: number) => {
-      resumeAudioContext();
       dispatch({ type: "PLAY_INDEX", index });
 
       const track = tracksRef.current[index];
@@ -414,7 +446,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         // loadAndPlay already sets isPlaying=false
       }
     },
-    [loadAndPlay, resumeAudioContext]
+    [loadAndPlay]
   );
 
   /* ---- playTrack ---- */
@@ -428,24 +460,40 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     [playIndex]
   );
 
-  /* ---- play / pause ---- */
+  /* ---- play / pause — route to active engine ---- */
   const play = useCallback(() => {
-    resumeAudioContext();
     dispatch({ type: "SET_PLAYING", isPlaying: true });
-    audioRef.current?.play().catch(() => {
-      dispatch({ type: "SET_PLAYING", isPlaying: false });
-    });
-  }, [resumeAudioContext]);
+
+    if (activeEngineRef.current === "youtube") {
+      try {
+        ytPlayerRef.current?.playVideo();
+      } catch {
+        /* ignore */
+      }
+    } else {
+      audioRef.current?.play().catch(() => {
+        dispatch({ type: "SET_PLAYING", isPlaying: false });
+      });
+    }
+  }, []);
 
   const pause = useCallback(() => {
     dispatch({ type: "SET_PLAYING", isPlaying: false });
-    audioRef.current?.pause();
+
+    if (activeEngineRef.current === "youtube") {
+      try {
+        ytPlayerRef.current?.pauseVideo();
+      } catch {
+        /* ignore */
+      }
+    } else {
+      audioRef.current?.pause();
+    }
   }, []);
 
   /* ---- next / previous ---- */
   const next = useCallback(() => {
     const s = stateRef.current;
-    resumeAudioContext();
 
     if (s.shuffle && s.tracks.length > 1) {
       const nextIdx = pickRandomIndex(s.tracks.length, s.currentIndex);
@@ -459,13 +507,20 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       if (track) loadAndPlay(track).catch(() => {});
     } else {
       dispatch({ type: "SET_PLAYING", isPlaying: false });
-      audioRef.current?.pause();
+      if (activeEngineRef.current === "youtube") {
+        try {
+          ytPlayerRef.current?.pauseVideo();
+        } catch {
+          /* ignore */
+        }
+      } else {
+        audioRef.current?.pause();
+      }
     }
-  }, [loadAndPlay, resumeAudioContext]);
+  }, [loadAndPlay]);
 
   const previous = useCallback(() => {
     const s = stateRef.current;
-    resumeAudioContext();
 
     if (s.shuffle && s.playHistory.length > 0) {
       const prevIdx = s.playHistory[s.playHistory.length - 1];
@@ -478,11 +533,79 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       const track = s.tracks[prevIdx];
       if (track) loadAndPlay(track).catch(() => {});
     }
-  }, [loadAndPlay, resumeAudioContext]);
+  }, [loadAndPlay]);
 
   /* ---- Stable ref for next(), used inside audio "ended" handler ---- */
   const nextRef = useRef(next);
   nextRef.current = next;
+
+  /* ---------------------------------------------------------------- */
+  /*  YouTube IFrame Player callbacks                                  */
+  /*  These are called by the <YouTubePlayer /> component.            */
+  /* ---------------------------------------------------------------- */
+
+  const onYTReady = useCallback((player: YTPlayer) => {
+    ytPlayerRef.current = player;
+    player.setVolume(volumeRef.current);
+
+    // If a load was queued before the player was ready, execute it now
+    if (pendingYTLoadRef.current) {
+      player.loadVideoById(pendingYTLoadRef.current);
+      pendingYTLoadRef.current = null;
+    }
+  }, []);
+
+  const onYTStateChange = useCallback((ytState: number) => {
+    if (activeEngineRef.current !== "youtube") return;
+
+    // YT.PlayerState: ENDED=0, PLAYING=1, PAUSED=2, BUFFERING=3, CUED=5
+    if (ytState === 1) {
+      // PLAYING
+      isResolvingRef.current = false;
+      consecutiveErrorsRef.current = 0;
+      dispatch({ type: "SET_PLAYING", isPlaying: true });
+    } else if (ytState === 2) {
+      // PAUSED — only report if we're not in the middle of loading a new track
+      if (!isResolvingRef.current) {
+        dispatch({ type: "SET_PLAYING", isPlaying: false });
+      }
+    } else if (ytState === 0) {
+      // ENDED — advance to next
+      nextRef.current();
+    }
+  }, []);
+
+  const onYTError = useCallback(() => {
+    if (activeEngineRef.current !== "youtube") return;
+    console.error("YouTube player error");
+    consecutiveErrorsRef.current += 1;
+    if (consecutiveErrorsRef.current <= 3) {
+      setTimeout(() => nextRef.current(), 800);
+    } else {
+      dispatch({ type: "SET_PLAYING", isPlaying: false });
+      dispatch({
+        type: "SET_ERROR",
+        error: "Playback error. Try another track.",
+      });
+    }
+  }, []);
+
+  const onYTProgress = useCallback(
+    (currentTime: number, duration: number) => {
+      if (activeEngineRef.current !== "youtube") return;
+      if (duration > 0) {
+        dispatch({
+          type: "SET_PROGRESS",
+          progress: currentTime / duration,
+        });
+        dispatch({
+          type: "SET_DURATION",
+          duration: duration * 1000, // seconds → ms
+        });
+      }
+    },
+    []
+  );
 
   /* ---- Derived ---- */
   const currentTrack =
@@ -512,6 +635,10 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         setError,
         setIsLoading,
         currentTrack,
+        onYTReady,
+        onYTStateChange,
+        onYTError,
+        onYTProgress,
       }}
     >
       {children}
