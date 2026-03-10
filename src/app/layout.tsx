@@ -10,7 +10,8 @@ const geistSans = Geist({
 
 export const metadata: Metadata = {
   title: "DjSetCloud",
-  description: "Discover and play DJ sets from SoundCloud",
+  description:
+    "Discover and play DJ sets from SoundCloud and YouTube — Afro House, House, Techno, Tech House",
 };
 
 export default function RootLayout({

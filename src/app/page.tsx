@@ -5,12 +5,19 @@ import { usePlayer } from "@/context/PlayerContext";
 import { TracksResponse } from "@/types";
 import Feed from "@/components/Feed";
 import Player from "@/components/Player";
-import SoundCloudWidget from "@/components/SoundCloudWidget";
 import ClockOverlay from "@/components/ClockOverlay";
 
+const REFRESH_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
+
 export default function Home() {
-  const { setTracks, appendTracks, refreshTracks, playIndex, setError, setIsLoading } =
-    usePlayer();
+  const {
+    setTracks,
+    appendTracks,
+    refreshTracks,
+    playIndex,
+    setError,
+    setIsLoading,
+  } = usePlayer();
   const [nextOffset, setNextOffset] = useState<number | null>(null);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -67,6 +74,14 @@ export default function Home() {
       });
   }, [isRefreshing, refreshTracks]);
 
+  // Auto-refresh feed every hour
+  useEffect(() => {
+    const interval = setInterval(() => {
+      handleRefresh();
+    }, REFRESH_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, [handleRefresh]);
+
   const handleLoadMore = useCallback(() => {
     if (nextOffset === null || isLoadingMore) return;
 
@@ -99,14 +114,39 @@ export default function Home() {
               viewBox="0 0 24 24"
               fill="none"
             >
-              {/* Outer ring */}
-              <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="1.5" fill="none" />
-              {/* Grooves */}
-              <circle cx="12" cy="12" r="7.5" stroke="currentColor" strokeWidth="0.5" strokeOpacity="0.5" fill="none" />
-              <circle cx="12" cy="12" r="5" stroke="currentColor" strokeWidth="0.5" strokeOpacity="0.5" fill="none" />
-              {/* Center label */}
-              <circle cx="12" cy="12" r="3" fill="currentColor" fillOpacity="0.3" />
-              {/* Center hole */}
+              <circle
+                cx="12"
+                cy="12"
+                r="10"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                fill="none"
+              />
+              <circle
+                cx="12"
+                cy="12"
+                r="7.5"
+                stroke="currentColor"
+                strokeWidth="0.5"
+                strokeOpacity="0.5"
+                fill="none"
+              />
+              <circle
+                cx="12"
+                cy="12"
+                r="5"
+                stroke="currentColor"
+                strokeWidth="0.5"
+                strokeOpacity="0.5"
+                fill="none"
+              />
+              <circle
+                cx="12"
+                cy="12"
+                r="3"
+                fill="currentColor"
+                fillOpacity="0.3"
+              />
               <circle cx="12" cy="12" r="1.2" fill="currentColor" />
             </svg>
           </div>
@@ -132,9 +172,6 @@ export default function Home() {
         isRefreshing={isRefreshing}
         onClockToggle={() => setShowClock(true)}
       />
-
-      {/* Hidden SoundCloud Widget */}
-      <SoundCloudWidget />
 
       {/* Clock overlay */}
       {showClock && <ClockOverlay onClose={() => setShowClock(false)} />}

@@ -8,7 +8,8 @@ interface ClockOverlayProps {
 }
 
 export default function ClockOverlay({ onClose }: ClockOverlayProps) {
-  const { state, currentTrack, play, pause, next, previous } = usePlayer();
+  const { state, currentTrack, play, pause, next, previous, setVolume } =
+    usePlayer();
   const [time, setTime] = useState(new Date());
 
   // Update clock every second
@@ -32,7 +33,6 @@ export default function ClockOverlay({ onClose }: ClockOverlayProps) {
     };
     request();
 
-    // Re-acquire when the tab becomes visible again
     const onVisibility = () => {
       if (document.visibilityState === "visible") request();
     };
@@ -55,8 +55,15 @@ export default function ClockOverlay({ onClose }: ClockOverlayProps) {
   );
 
   const stopPropagation = useCallback(
-    (e: React.MouseEvent) => e.stopPropagation(),
+    (e: React.MouseEvent | React.TouchEvent) => e.stopPropagation(),
     []
+  );
+
+  const handleVolumeChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      setVolume(Number(e.target.value));
+    },
+    [setVolume]
   );
 
   const hours = time.getHours().toString().padStart(2, "0");
@@ -76,7 +83,7 @@ export default function ClockOverlay({ onClose }: ClockOverlayProps) {
       className="fixed inset-0 z-[100] bg-black flex flex-col items-center justify-center select-none overflow-hidden cursor-pointer"
       onClick={onClose}
     >
-      {/* ——— Animated glow layers ——— */}
+      {/* Animated glow layers */}
       <div
         className="absolute rounded-full pointer-events-none"
         style={{
@@ -106,7 +113,7 @@ export default function ClockOverlay({ onClose }: ClockOverlayProps) {
         }}
       />
 
-      {/* ——— Time display ——— */}
+      {/* Time display */}
       <div className="relative z-10 flex items-baseline">
         <span
           className="text-7xl sm:text-8xl md:text-9xl font-bold tabular-nums tracking-wider"
@@ -159,7 +166,7 @@ export default function ClockOverlay({ onClose }: ClockOverlayProps) {
         </span>
       </div>
 
-      {/* ——— Visualiser bars ——— */}
+      {/* Visualiser bars */}
       <div
         className="relative z-10 flex items-end justify-center gap-[2px] sm:gap-[3px] mt-8 px-4"
         style={{ height: "56px", width: "min(420px, 85vw)" }}
@@ -181,7 +188,7 @@ export default function ClockOverlay({ onClose }: ClockOverlayProps) {
         ))}
       </div>
 
-      {/* ——— Track info ——— */}
+      {/* Track info */}
       {currentTrack && (
         <div className="relative z-10 mt-10 text-center px-8">
           <p className="text-white/50 text-base sm:text-lg truncate max-w-xs sm:max-w-sm">
@@ -193,7 +200,7 @@ export default function ClockOverlay({ onClose }: ClockOverlayProps) {
         </div>
       )}
 
-      {/* ——— Playback controls ——— */}
+      {/* Playback controls */}
       <div
         className="relative z-10 flex items-center gap-5 mt-8"
         onClick={stopPropagation}
@@ -240,7 +247,45 @@ export default function ClockOverlay({ onClose }: ClockOverlayProps) {
         </button>
       </div>
 
-      {/* ——— Close button ——— */}
+      {/* Volume slider */}
+      <div
+        className="relative z-10 flex items-center gap-3 mt-6 px-4"
+        onClick={stopPropagation}
+        onTouchStart={stopPropagation}
+        onTouchMove={stopPropagation}
+        onTouchEnd={stopPropagation}
+      >
+        {/* Speaker low icon */}
+        <svg
+          className="w-4 h-4 text-white/25 flex-shrink-0"
+          fill="currentColor"
+          viewBox="0 0 24 24"
+        >
+          <path d="M3 9v6h4l5 5V4L7 9H3z" />
+        </svg>
+
+        <input
+          type="range"
+          min={0}
+          max={100}
+          step={1}
+          value={state.volume}
+          onChange={handleVolumeChange}
+          className="volume-slider w-28 sm:w-36"
+          aria-label="Volume"
+        />
+
+        {/* Speaker high icon */}
+        <svg
+          className="w-4 h-4 text-white/25 flex-shrink-0"
+          fill="currentColor"
+          viewBox="0 0 24 24"
+        >
+          <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z" />
+        </svg>
+      </div>
+
+      {/* Close button */}
       <button
         onClick={onClose}
         className="absolute top-6 right-6 z-20 p-2 text-white/15 hover:text-white/40 transition-colors"
@@ -261,7 +306,7 @@ export default function ClockOverlay({ onClose }: ClockOverlayProps) {
         </svg>
       </button>
 
-      {/* ——— Hint ——— */}
+      {/* Hint */}
       <p className="absolute bottom-6 text-white/10 text-xs">
         Tap anywhere to close
       </p>

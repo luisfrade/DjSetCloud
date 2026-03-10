@@ -1,5 +1,6 @@
 export interface Track {
-  id: number;
+  id: string; // "sc-{numericId}" or "yt-{videoId}"
+  source: "soundcloud" | "youtube";
   title: string;
   permalink_url: string;
   artwork_url: string | null;
@@ -35,50 +36,11 @@ export type PlayerAction =
   | { type: "APPEND_TRACKS"; tracks: Track[] }
   | { type: "REFRESH_TRACKS"; tracks: Track[] }
   | { type: "PLAY_INDEX"; index: number }
+  | { type: "PLAY_PREV_INDEX"; index: number }
   | { type: "SET_PLAYING"; isPlaying: boolean }
   | { type: "SET_VOLUME"; volume: number }
   | { type: "SET_PROGRESS"; progress: number }
   | { type: "SET_DURATION"; duration: number }
   | { type: "SET_LOADING"; isLoading: boolean }
   | { type: "SET_ERROR"; error: string | null }
-  | { type: "SET_SHUFFLE"; shuffle: boolean }
-  | { type: "NEXT" }
-  | { type: "PREVIOUS" };
-
-// SoundCloud Widget API types
-export interface SCWidgetInstance {
-  load(url: string, options?: Record<string, unknown>): void;
-  play(): void;
-  pause(): void;
-  toggle(): void;
-  seekTo(milliseconds: number): void;
-  setVolume(volume: number): void;
-  getVolume(callback: (volume: number) => void): void;
-  getDuration(callback: (duration: number) => void): void;
-  getPosition(callback: (position: number) => void): void;
-  getCurrentSound(callback: (sound: unknown) => void): void;
-  isPaused(callback: (paused: boolean) => void): void;
-  bind(eventName: string, listener: (data?: unknown) => void): void;
-  unbind(eventName: string): void;
-}
-
-export interface SCWidgetEvents {
-  READY: string;
-  PLAY: string;
-  PAUSE: string;
-  FINISH: string;
-  PLAY_PROGRESS: string;
-  SEEK: string;
-  ERROR: string;
-}
-
-declare global {
-  interface Window {
-    SC: {
-      Widget: {
-        (iframe: HTMLIFrameElement | string): SCWidgetInstance;
-        Events: SCWidgetEvents;
-      };
-    };
-  }
-}
+  | { type: "SET_SHUFFLE"; shuffle: boolean };

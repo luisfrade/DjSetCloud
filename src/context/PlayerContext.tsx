@@ -8,16 +8,31 @@ import {
   useRef,
   useEffect,
   type ReactNode,
-  type MutableRefObject,
 } from "react";
-import { Track, PlayerState, PlayerAction, SCWidgetInstance } from "@/types";
-import { unlockAudioSession } from "@/lib/audioUnlock";
+import { Track, PlayerState, PlayerAction } from "@/types";
+
+/* ------------------------------------------------------------------ */
+/*  Helpers                                                            */
+/* ------------------------------------------------------------------ */
 
 function getInitialShuffle(): boolean {
   if (typeof window === "undefined") return true;
   const stored = localStorage.getItem("djsetcloud-shuffle");
   return stored === null ? true : stored === "true";
 }
+
+function pickRandomIndex(total: number, exclude: number): number {
+  if (total <= 1) return 0;
+  let idx: number;
+  do {
+    idx = Math.floor(Math.random() * total);
+  } while (idx === exclude);
+  return idx;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Reducer                                                            */
+/* ------------------------------------------------------------------ */
 
 const initialState: PlayerState = {
   tracks: [],
@@ -32,32 +47,38 @@ const initialState: PlayerState = {
   playHistory: [],
 };
 
-function pickRandomIndex(total: number, exclude: number): number {
-  if (total <= 1) return 0;
-  let idx: number;
-  do {
-    idx = Math.floor(Math.random() * total);
-  } while (idx === exclude);
-  return idx;
-}
-
 function playerReducer(state: PlayerState, action: PlayerAction): PlayerState {
   switch (action.type) {
     case "SET_TRACKS":
       return { ...state, tracks: action.tracks, isLoading: false, error: null };
+
     case "APPEND_TRACKS":
       return { ...state, tracks: [...state.tracks, ...action.tracks] };
+
     case "REFRESH_TRACKS": {
       const currentTrack =
         state.currentIndex >= 0 && state.currentIndex < state.tracks.length
           ? state.tracks[state.currentIndex]
           : null;
       if (!currentTrack) {
-        return { ...state, tracks: action.tracks, isLoading: false, error: null };
+        return {
+          ...state,
+          tracks: action.tracks,
+          isLoading: false,
+          error: null,
+        };
       }
-      const newIndex = action.tracks.findIndex((t) => t.id === currentTrack.id);
+      const newIndex = action.tracks.findIndex(
+        (t) => t.id === currentTrack.id
+      );
       if (newIndex !== -1) {
-        return { ...state, tracks: action.tracks, currentIndex: newIndex, isLoading: false, error: null };
+        return {
+          ...state,
+          tracks: action.tracks,
+          currentIndex: newIndex,
+          isLoading: false,
+          error: null,
+        };
       }
       return {
         ...state,
@@ -67,17 +88,30 @@ function playerReducer(state: PlayerState, action: PlayerAction): PlayerState {
         error: null,
       };
     }
+
     case "PLAY_INDEX":
       return {
         ...state,
         currentIndex: action.index,
         isPlaying: true,
         progress: 0,
+        error: null,
         playHistory:
           state.currentIndex >= 0
             ? [...state.playHistory, state.currentIndex]
             : state.playHistory,
       };
+
+    case "PLAY_PREV_INDEX":
+      return {
+        ...state,
+        currentIndex: action.index,
+        isPlaying: true,
+        progress: 0,
+        error: null,
+        playHistory: state.playHistory.slice(0, -1),
+      };
+
     case "SET_PLAYING":
       return { ...state, isPlaying: action.isPlaying };
     case "SET_VOLUME":
@@ -92,60 +126,17 @@ function playerReducer(state: PlayerState, action: PlayerAction): PlayerState {
       return { ...state, error: action.error, isLoading: false };
     case "SET_SHUFFLE":
       return { ...state, shuffle: action.shuffle };
-    case "NEXT": {
-      if (state.shuffle && state.tracks.length > 1) {
-        const nextIdx = pickRandomIndex(state.tracks.length, state.currentIndex);
-        return {
-          ...state,
-          currentIndex: nextIdx,
-          isPlaying: true,
-          progress: 0,
-          playHistory: [...state.playHistory, state.currentIndex],
-        };
-      }
-      if (state.currentIndex < state.tracks.length - 1) {
-        return {
-          ...state,
-          currentIndex: state.currentIndex + 1,
-          isPlaying: true,
-          progress: 0,
-          playHistory: [...state.playHistory, state.currentIndex],
-        };
-      }
-      return { ...state, isPlaying: false };
-    }
-    case "PREVIOUS": {
-      if (state.shuffle && state.playHistory.length > 0) {
-        const history = [...state.playHistory];
-        const prevIdx = history.pop()!;
-        return {
-          ...state,
-          currentIndex: prevIdx,
-          isPlaying: true,
-          progress: 0,
-          playHistory: history,
-        };
-      }
-      if (state.currentIndex > 0) {
-        return {
-          ...state,
-          currentIndex: state.currentIndex - 1,
-          isPlaying: true,
-          progress: 0,
-        };
-      }
-      return state;
-    }
     default:
       return state;
   }
 }
 
+/* ------------------------------------------------------------------ */
+/*  Context                                                            */
+/* ------------------------------------------------------------------ */
+
 interface PlayerContextValue {
   state: PlayerState;
-  widgetRef: MutableRefObject<SCWidgetInstance | null>;
-  volumeRef: MutableRefObject<number>;
-  loadedUrlRef: MutableRefObject<string | null>;
   setTracks: (tracks: Track[]) => void;
   appendTracks: (tracks: Track[]) => void;
   refreshTracks: (tracks: Track[]) => void;
@@ -156,7 +147,7 @@ interface PlayerContextValue {
   next: () => void;
   previous: () => void;
   setVolume: (v: number) => void;
-  seekTo: (ms: number) => void;
+  seekTo: (fraction: number) => void;
   setShuffle: (s: boolean) => void;
   setProgress: (p: number) => void;
   setDuration: (d: number) => void;
@@ -168,23 +159,140 @@ interface PlayerContextValue {
 
 const PlayerContext = createContext<PlayerContextValue | null>(null);
 
+/* ------------------------------------------------------------------ */
+/*  Provider                                                           */
+/* ------------------------------------------------------------------ */
+
 export function PlayerProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(playerReducer, initialState);
-  const widgetRef = useRef<SCWidgetInstance | null>(null);
-  const volumeRef = useRef(initialState.volume);
+
+  /* ---- refs ---- */
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const gainNodeRef = useRef<GainNode | null>(null);
+  const audioCtxRef = useRef<AudioContext | null>(null);
   const tracksRef = useRef(state.tracks);
-  const loadedUrlRef = useRef<string | null>(null);
+  const stateRef = useRef(state);
+  const volumeRef = useRef(initialState.volume);
+  const consecutiveErrorsRef = useRef(0);
+  const isResolvingRef = useRef(false);
 
   // Keep refs in sync
-  volumeRef.current = state.volume;
   tracksRef.current = state.tracks;
+  stateRef.current = state;
+  volumeRef.current = state.volume;
 
-  // Load shuffle from localStorage on mount
+  /* ---- Create Audio element + Web Audio gain node (once) ---- */
+  useEffect(() => {
+    const audio = new Audio();
+    audio.preload = "auto";
+    // crossOrigin needed for Web Audio API createMediaElementSource
+    audio.crossOrigin = "anonymous";
+    audioRef.current = audio;
+
+    // Set up Web Audio API for software volume control (iOS needs this)
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const AudioCtx =
+        window.AudioContext || (window as any).webkitAudioContext;
+      if (AudioCtx) {
+        const ctx = new AudioCtx();
+        const source = ctx.createMediaElementSource(audio);
+        const gain = ctx.createGain();
+        source.connect(gain);
+        gain.connect(ctx.destination);
+
+        audioCtxRef.current = ctx;
+        gainNodeRef.current = gain;
+        gain.gain.value = volumeRef.current / 100;
+      }
+    } catch (err) {
+      console.warn(
+        "Web Audio setup failed — falling back to audio.volume:",
+        err
+      );
+    }
+
+    // Fallback volume for non-iOS browsers
+    audio.volume = volumeRef.current / 100;
+
+    /* ---- Audio event listeners ---- */
+    const onTimeUpdate = () => {
+      if (audio.duration > 0 && isFinite(audio.duration)) {
+        dispatch({
+          type: "SET_PROGRESS",
+          progress: audio.currentTime / audio.duration,
+        });
+      }
+    };
+
+    const onDurationChange = () => {
+      if (audio.duration > 0 && isFinite(audio.duration)) {
+        dispatch({
+          type: "SET_DURATION",
+          duration: audio.duration * 1000, // seconds → ms
+        });
+      }
+    };
+
+    const onPlay = () => {
+      consecutiveErrorsRef.current = 0;
+      dispatch({ type: "SET_PLAYING", isPlaying: true });
+    };
+
+    const onPause = () => {
+      // Ignore pause events while we're resolving a new stream
+      if (!isResolvingRef.current) {
+        dispatch({ type: "SET_PLAYING", isPlaying: false });
+      }
+    };
+
+    const onEnded = () => {
+      nextRef.current();
+    };
+
+    const onError = () => {
+      if (!audio.src || audio.src === "") return; // ignore empty src errors
+      console.error("Audio playback error:", audio.error?.message);
+      consecutiveErrorsRef.current += 1;
+      if (consecutiveErrorsRef.current <= 3) {
+        setTimeout(() => nextRef.current(), 800);
+      } else {
+        dispatch({ type: "SET_PLAYING", isPlaying: false });
+        dispatch({
+          type: "SET_ERROR",
+          error: "Playback error. Try another track.",
+        });
+      }
+    };
+
+    audio.addEventListener("timeupdate", onTimeUpdate);
+    audio.addEventListener("durationchange", onDurationChange);
+    audio.addEventListener("play", onPlay);
+    audio.addEventListener("pause", onPause);
+    audio.addEventListener("ended", onEnded);
+    audio.addEventListener("error", onError);
+
+    return () => {
+      audio.removeEventListener("timeupdate", onTimeUpdate);
+      audio.removeEventListener("durationchange", onDurationChange);
+      audio.removeEventListener("play", onPlay);
+      audio.removeEventListener("pause", onPause);
+      audio.removeEventListener("ended", onEnded);
+      audio.removeEventListener("error", onError);
+      audio.pause();
+      audio.src = "";
+      audioCtxRef.current?.close();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /* ---- Load shuffle preference from localStorage ---- */
   useEffect(() => {
     const shuffle = getInitialShuffle();
     dispatch({ type: "SET_SHUFFLE", shuffle });
   }, []);
 
+  /* ---- Simple dispatchers ---- */
   const setTracks = useCallback(
     (tracks: Track[]) => dispatch({ type: "SET_TRACKS", tracks }),
     []
@@ -197,98 +305,6 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     (tracks: Track[]) => dispatch({ type: "REFRESH_TRACKS", tracks }),
     []
   );
-
-  /**
-   * Verify that playback actually started.  If the widget is still paused
-   * after a short delay (e.g. iOS blocked autoplay silently), reset
-   * isPlaying so the UI shows the play button instead of the pause button.
-   */
-  const verifyPlayback = useCallback(() => {
-    setTimeout(() => {
-      widgetRef.current?.isPaused((paused: boolean) => {
-        if (paused) {
-          dispatch({ type: "SET_PLAYING", isPlaying: false });
-        }
-      });
-    }, 1500);
-  }, []);
-
-  /**
-   * playIndex — loads a new track using widget.load() (preserves the widget
-   * instance) and calls unlockAudioSession() to activate the iOS audio
-   * session within the gesture handler.
-   */
-  const playIndex = useCallback(
-    (index: number) => {
-      unlockAudioSession();
-      dispatch({ type: "PLAY_INDEX", index });
-
-      const track = tracksRef.current[index];
-      if (!track) return;
-
-      loadedUrlRef.current = track.permalink_url;
-
-      if (widgetRef.current) {
-        widgetRef.current.load(track.permalink_url, {
-          auto_play: true,
-          callback: () => {
-            widgetRef.current?.setVolume(volumeRef.current);
-            widgetRef.current?.getDuration((d: number) => {
-              dispatch({ type: "SET_DURATION", duration: d });
-            });
-          },
-        });
-      }
-
-      // Check if playback actually started (iOS may block silently)
-      verifyPlayback();
-    },
-    [verifyPlayback]
-  );
-
-  const playTrack = useCallback(
-    (track: Track) => {
-      const index = state.tracks.findIndex((t) => t.id === track.id);
-      if (index !== -1) playIndex(index);
-    },
-    [state.tracks, playIndex]
-  );
-
-  const play = useCallback(() => {
-    unlockAudioSession();
-    dispatch({ type: "SET_PLAYING", isPlaying: true });
-    widgetRef.current?.play();
-    // Verify playback actually started
-    verifyPlayback();
-  }, [verifyPlayback]);
-
-  const pause = useCallback(() => {
-    dispatch({ type: "SET_PLAYING", isPlaying: false });
-    widgetRef.current?.pause();
-  }, []);
-
-  const next = useCallback(() => dispatch({ type: "NEXT" }), []);
-  const previous = useCallback(() => dispatch({ type: "PREVIOUS" }), []);
-
-  const setVolume = useCallback(
-    (volume: number) => {
-      dispatch({ type: "SET_VOLUME", volume });
-      widgetRef.current?.setVolume(volume);
-    },
-    []
-  );
-  const seekTo = useCallback(
-    (ms: number) => {
-      widgetRef.current?.seekTo(ms);
-    },
-    []
-  );
-  const setShuffle = useCallback((shuffle: boolean) => {
-    dispatch({ type: "SET_SHUFFLE", shuffle });
-    if (typeof window !== "undefined") {
-      localStorage.setItem("djsetcloud-shuffle", String(shuffle));
-    }
-  }, []);
   const setProgress = useCallback(
     (progress: number) => dispatch({ type: "SET_PROGRESS", progress }),
     []
@@ -310,6 +326,165 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     []
   );
 
+  /* ---- Volume ---- */
+  const setVolume = useCallback((volume: number) => {
+    dispatch({ type: "SET_VOLUME", volume });
+    const v = volume / 100;
+    if (gainNodeRef.current) {
+      gainNodeRef.current.gain.value = v;
+    }
+    if (audioRef.current) {
+      audioRef.current.volume = v;
+    }
+  }, []);
+
+  /* ---- Shuffle ---- */
+  const setShuffle = useCallback((shuffle: boolean) => {
+    dispatch({ type: "SET_SHUFFLE", shuffle });
+    if (typeof window !== "undefined") {
+      localStorage.setItem("djsetcloud-shuffle", String(shuffle));
+    }
+  }, []);
+
+  /* ---- Seek (fraction 0–1) ---- */
+  const seekTo = useCallback((fraction: number) => {
+    const audio = audioRef.current;
+    if (audio && audio.duration > 0 && isFinite(audio.duration)) {
+      audio.currentTime = fraction * audio.duration;
+    }
+  }, []);
+
+  /* ---- Resume AudioContext (required on iOS before playback) ---- */
+  const resumeAudioContext = useCallback(() => {
+    if (audioCtxRef.current?.state === "suspended") {
+      audioCtxRef.current.resume();
+    }
+  }, []);
+
+  /* ---- Core: resolve stream URL & play ---- */
+  const loadAndPlay = useCallback(async (track: Track) => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    isResolvingRef.current = true;
+
+    try {
+      const res = await fetch(
+        `/api/stream?id=${encodeURIComponent(track.id)}`
+      );
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(
+          (data as { error?: string }).error ||
+            `Stream resolution HTTP ${res.status}`
+        );
+      }
+      const data = await res.json();
+      if (!data.url) throw new Error("Empty stream URL");
+
+      audio.src = data.url;
+      audio.volume = volumeRef.current / 100;
+      if (gainNodeRef.current) {
+        gainNodeRef.current.gain.value = volumeRef.current / 100;
+      }
+
+      isResolvingRef.current = false;
+
+      await audio.play();
+    } catch (err) {
+      isResolvingRef.current = false;
+      console.warn("loadAndPlay failed:", err);
+      dispatch({ type: "SET_PLAYING", isPlaying: false });
+      throw err; // let caller handle
+    }
+  }, []);
+
+  /* ---- playIndex (user gesture → load + play) ---- */
+  const playIndex = useCallback(
+    async (index: number) => {
+      resumeAudioContext();
+      dispatch({ type: "PLAY_INDEX", index });
+
+      const track = tracksRef.current[index];
+      if (!track) return;
+
+      try {
+        await loadAndPlay(track);
+      } catch {
+        // loadAndPlay already sets isPlaying=false
+      }
+    },
+    [loadAndPlay, resumeAudioContext]
+  );
+
+  /* ---- playTrack ---- */
+  const playTrack = useCallback(
+    (track: Track) => {
+      const index = stateRef.current.tracks.findIndex(
+        (t) => t.id === track.id
+      );
+      if (index !== -1) playIndex(index);
+    },
+    [playIndex]
+  );
+
+  /* ---- play / pause ---- */
+  const play = useCallback(() => {
+    resumeAudioContext();
+    dispatch({ type: "SET_PLAYING", isPlaying: true });
+    audioRef.current?.play().catch(() => {
+      dispatch({ type: "SET_PLAYING", isPlaying: false });
+    });
+  }, [resumeAudioContext]);
+
+  const pause = useCallback(() => {
+    dispatch({ type: "SET_PLAYING", isPlaying: false });
+    audioRef.current?.pause();
+  }, []);
+
+  /* ---- next / previous ---- */
+  const next = useCallback(() => {
+    const s = stateRef.current;
+    resumeAudioContext();
+
+    if (s.shuffle && s.tracks.length > 1) {
+      const nextIdx = pickRandomIndex(s.tracks.length, s.currentIndex);
+      dispatch({ type: "PLAY_INDEX", index: nextIdx });
+      const track = s.tracks[nextIdx];
+      if (track) loadAndPlay(track).catch(() => {});
+    } else if (s.currentIndex < s.tracks.length - 1) {
+      const nextIdx = s.currentIndex + 1;
+      dispatch({ type: "PLAY_INDEX", index: nextIdx });
+      const track = s.tracks[nextIdx];
+      if (track) loadAndPlay(track).catch(() => {});
+    } else {
+      dispatch({ type: "SET_PLAYING", isPlaying: false });
+      audioRef.current?.pause();
+    }
+  }, [loadAndPlay, resumeAudioContext]);
+
+  const previous = useCallback(() => {
+    const s = stateRef.current;
+    resumeAudioContext();
+
+    if (s.shuffle && s.playHistory.length > 0) {
+      const prevIdx = s.playHistory[s.playHistory.length - 1];
+      dispatch({ type: "PLAY_PREV_INDEX", index: prevIdx });
+      const track = s.tracks[prevIdx];
+      if (track) loadAndPlay(track).catch(() => {});
+    } else if (s.currentIndex > 0) {
+      const prevIdx = s.currentIndex - 1;
+      dispatch({ type: "PLAY_INDEX", index: prevIdx });
+      const track = s.tracks[prevIdx];
+      if (track) loadAndPlay(track).catch(() => {});
+    }
+  }, [loadAndPlay, resumeAudioContext]);
+
+  /* ---- Stable ref for next(), used inside audio "ended" handler ---- */
+  const nextRef = useRef(next);
+  nextRef.current = next;
+
+  /* ---- Derived ---- */
   const currentTrack =
     state.currentIndex >= 0 && state.currentIndex < state.tracks.length
       ? state.tracks[state.currentIndex]
@@ -319,9 +494,6 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     <PlayerContext.Provider
       value={{
         state,
-        widgetRef,
-        volumeRef,
-        loadedUrlRef,
         setTracks,
         appendTracks,
         refreshTracks,

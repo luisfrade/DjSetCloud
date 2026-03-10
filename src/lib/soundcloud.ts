@@ -2,18 +2,24 @@ import { Track } from "@/types";
 
 let cachedClientId: string | null = null;
 
+/**
+ * In-memory cache for stream resolution data.
+ * Stores { mediaUrl, trackAuth } keyed by SoundCloud numeric track ID.
+ * Populated when tracks are fetched from the search API.
+ */
+const trackStreamCache = new Map<
+  number,
+  { mediaUrl: string; trackAuth: string }
+>();
+
 async function resolveClientId(): Promise<string> {
-  // Check env var first
   if (process.env.SOUNDCLOUD_CLIENT_ID) {
     return process.env.SOUNDCLOUD_CLIENT_ID;
   }
-
-  // Return cached if available
   if (cachedClientId) {
     return cachedClientId;
   }
 
-  // Scrape client_id from SoundCloud's JS bundles
   const res = await fetch("https://soundcloud.com", {
     headers: {
       "User-Agent":
@@ -21,10 +27,10 @@ async function resolveClientId(): Promise<string> {
     },
   });
   const html = await res.text();
-
-  // Find cross-origin script URLs
   const scriptUrls = [
-    ...html.matchAll(/src="(https:\/\/a-v2\.sndcdn\.com\/assets\/[^"]+\.js)"/g),
+    ...html.matchAll(
+      /src="(https:\/\/a-v2\.sndcdn\.com\/assets\/[^"]+\.js)"/g
+    ),
   ].map((m) => m[1]);
 
   for (const url of scriptUrls.slice(-5)) {
@@ -48,13 +54,6 @@ export function clearClientIdCache() {
   cachedClientId = null;
 }
 
-interface SearchParams {
-  query: string;
-  genre: string;
-  minDurationMs: number;
-  limit: number;
-}
-
 interface SCApiTrack {
   id: number;
   title: string;
@@ -67,6 +66,27 @@ interface SCApiTrack {
     username: string;
     avatar_url: string;
   };
+  media?: {
+    transcodings?: Array<{
+      url: string;
+      preset: string;
+      duration: number;
+      snipped: boolean;
+      format: {
+        protocol: string;
+        mime_type: string;
+      };
+      quality: string;
+    }>;
+  };
+  track_authorization?: string;
+}
+
+interface SearchParams {
+  query: string;
+  genre: string;
+  minDurationMs: number;
+  limit: number;
 }
 
 async function searchTracksForGenre(
@@ -76,7 +96,7 @@ async function searchTracksForGenre(
   const url = new URL("https://api-v2.soundcloud.com/search/tracks");
   url.searchParams.set("q", params.query);
   url.searchParams.set("filter.genre_or_tag", params.genre);
-  url.searchParams.set("filter.duration", "epic"); // epic = 10+ min on SC
+  url.searchParams.set("filter.duration", "epic");
   url.searchParams.set("limit", String(params.limit));
   url.searchParams.set("access", "playable");
   url.searchParams.set("linked_partitioning", "true");
@@ -98,33 +118,50 @@ async function searchTracksForGenre(
   const data = await res.json();
   const tracks: SCApiTrack[] = data.collection || [];
 
-  // Filter by minimum duration (40 min = 2,400,000 ms)
   return tracks
     .filter((t) => t.duration >= params.minDurationMs)
-    .map((t) => ({
-      id: t.id,
-      title: t.title,
-      permalink_url: t.permalink_url,
-      artwork_url: t.artwork_url,
-      duration: t.duration,
-      created_at: t.created_at,
-      genre: t.genre,
-      user: {
-        username: t.user.username,
-        avatar_url: t.user.avatar_url,
-      },
-    }));
+    .map((t) => {
+      // Cache progressive (or HLS fallback) transcoding URL for stream resolution
+      const progressive = t.media?.transcodings?.find(
+        (tc) => tc.format.protocol === "progressive"
+      );
+      const hls = t.media?.transcodings?.find(
+        (tc) => tc.format.protocol === "hls"
+      );
+      const mediaUrl = progressive?.url || hls?.url;
+      if (mediaUrl && t.track_authorization) {
+        trackStreamCache.set(t.id, {
+          mediaUrl,
+          trackAuth: t.track_authorization,
+        });
+      }
+
+      return {
+        id: `sc-${t.id}`,
+        source: "soundcloud" as const,
+        title: t.title,
+        permalink_url: t.permalink_url,
+        artwork_url: t.artwork_url,
+        duration: t.duration,
+        created_at: t.created_at,
+        genre: t.genre,
+        user: {
+          username: t.user.username,
+          avatar_url: t.user.avatar_url,
+        },
+      };
+    });
 }
 
 const GENRES = ["afro house", "house", "techno", "tech house"];
 const MIN_DURATION_MS = 40 * 60 * 1000; // 40 minutes
 
-export async function fetchAllTracks(
-  offset: number = 0,
-  limit: number = 50
-): Promise<{ tracks: Track[]; nextOffset: number | null }> {
+/**
+ * Fetch all SoundCloud DJ-set tracks across genres.
+ * Returns a de-duplicated, date-sorted array.
+ */
+export async function fetchSoundCloudTracks(): Promise<Track[]> {
   let clientId = await resolveClientId();
-
   const results: Track[] = [];
 
   for (const genre of GENRES) {
@@ -140,7 +177,6 @@ export async function fetchAllTracks(
       );
       results.push(...tracks);
     } catch (err) {
-      // If auth error, try re-resolving client_id once
       if (
         err instanceof Error &&
         err.message.includes("auth error") &&
@@ -168,12 +204,8 @@ export async function fetchAllTracks(
     }
   }
 
-  if (results.length === 0) {
-    throw new Error("No tracks found from any genre search");
-  }
-
   // Deduplicate by track ID
-  const seen = new Set<number>();
+  const seen = new Set<string>();
   const unique = results.filter((t) => {
     if (seen.has(t.id)) return false;
     seen.add(t.id);
@@ -186,10 +218,60 @@ export async function fetchAllTracks(
       new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
   );
 
-  // Apply pagination
-  const paginated = unique.slice(offset, offset + limit);
-  const nextOffset =
-    offset + limit < unique.length ? offset + limit : null;
+  return unique;
+}
 
-  return { tracks: paginated, nextOffset };
+/**
+ * Resolve a direct streaming URL for a SoundCloud track by its numeric ID.
+ * First checks the in-memory cache (populated during search), then falls back
+ * to fetching the track by ID from the SoundCloud API.
+ */
+export async function resolveSoundCloudStreamUrl(
+  numericId: number
+): Promise<string> {
+  const clientId = await resolveClientId();
+
+  let streamData = trackStreamCache.get(numericId);
+
+  if (!streamData) {
+    // Cache miss — fetch the track by ID to get transcodings
+    const res = await fetch(
+      `https://api-v2.soundcloud.com/tracks/${numericId}?client_id=${clientId}`,
+      { signal: AbortSignal.timeout(10000) }
+    );
+    if (!res.ok) throw new Error(`Failed to fetch track ${numericId}`);
+    const track: SCApiTrack = await res.json();
+
+    const progressive = track.media?.transcodings?.find(
+      (tc) => tc.format.protocol === "progressive"
+    );
+    const hls = track.media?.transcodings?.find(
+      (tc) => tc.format.protocol === "hls"
+    );
+    const mediaUrl = progressive?.url || hls?.url;
+
+    if (!mediaUrl || !track.track_authorization) {
+      throw new Error("No streaming data available for this track");
+    }
+
+    streamData = { mediaUrl, trackAuth: track.track_authorization };
+    trackStreamCache.set(numericId, streamData);
+  }
+
+  // Resolve the actual stream URL from the transcoding endpoint
+  const resolveUrl = `${streamData.mediaUrl}?client_id=${clientId}&track_authorization=${streamData.trackAuth}`;
+  const res = await fetch(resolveUrl, { signal: AbortSignal.timeout(10000) });
+
+  if (!res.ok) {
+    // Cache might be stale — clear and throw so caller can retry
+    trackStreamCache.delete(numericId);
+    throw new Error("Failed to resolve SoundCloud stream URL");
+  }
+
+  const data = await res.json();
+  if (!data.url) {
+    throw new Error("No stream URL in SoundCloud response");
+  }
+
+  return data.url;
 }
