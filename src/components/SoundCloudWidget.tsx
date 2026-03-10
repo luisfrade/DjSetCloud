@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef } from "react";
 import { usePlayer } from "@/context/PlayerContext";
 import { unlockAudioSession } from "@/lib/audioUnlock";
 
@@ -8,10 +8,8 @@ export default function SoundCloudWidget() {
   const {
     state,
     widgetRef: sharedWidgetRef,
-    iframeRef: sharedIframeRef,
     volumeRef,
     loadedUrlRef,
-    pendingTrackRef,
     currentTrack,
     next,
     setIsPlaying,
@@ -19,10 +17,12 @@ export default function SoundCloudWidget() {
     setDuration,
   } = usePlayer();
 
-  const localIframeRef = useRef<HTMLIFrameElement>(null);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
   const scriptLoadedRef = useRef(false);
+  const widgetInitializedRef = useRef(false);
   const consecutiveErrorsRef = useRef(0);
-  const playbackStartedRef = useRef(false);
+  const isLoadingTrackRef = useRef(false);
+  const playbackEverStartedRef = useRef(false);
 
   // Stable refs for callbacks used inside widget event bindings
   const nextRef = useRef(next);
@@ -33,14 +33,6 @@ export default function SoundCloudWidget() {
   setIsPlayingRef.current = setIsPlaying;
   setProgressRef.current = setProgress;
   setDurationRef.current = setDuration;
-
-  // Share the iframe element with the context so playIndex can set .src directly
-  useEffect(() => {
-    sharedIframeRef.current = localIframeRef.current;
-    return () => {
-      sharedIframeRef.current = null;
-    };
-  }, [sharedIframeRef]);
 
   // Load the Widget API script
   useEffect(() => {
@@ -53,7 +45,6 @@ export default function SoundCloudWidget() {
       scriptLoadedRef.current = true;
       return;
     }
-
     const script = document.createElement("script");
     script.src = "https://w.soundcloud.com/player/api.js";
     script.async = true;
@@ -63,131 +54,112 @@ export default function SoundCloudWidget() {
     document.body.appendChild(script);
   }, []);
 
-  /**
-   * initWidget — called every time the iframe loads.
-   *
-   * Because playIndex() sets iframe.src directly (for iOS gesture-chain compat),
-   * the iframe reloads on every track change.  After each reload we must
-   * re-create the widget controller and re-bind all events.
-   */
-  const initWidget = useCallback(() => {
-    if (!localIframeRef.current || !window.SC) return;
-
-    const widget = window.SC.Widget(localIframeRef.current);
-    sharedWidgetRef.current = widget;
-
-    const events = window.SC.Widget.Events;
-
-    widget.bind(events.READY, () => {
-      widget.setVolume(volumeRef.current);
-      widget.getDuration((d: number) => {
-        setDurationRef.current(d);
-      });
-      // Attempt play — iOS may block this (first load before any gesture)
-      widget.play();
-    });
-
-    widget.bind(events.PLAY, () => {
-      consecutiveErrorsRef.current = 0;
-      playbackStartedRef.current = true;
-      setIsPlayingRef.current(true);
-    });
-
-    widget.bind(events.PAUSE, () => {
-      setIsPlayingRef.current(false);
-    });
-
-    widget.bind(events.FINISH, () => {
-      nextRef.current();
-    });
-
-    widget.bind(events.PLAY_PROGRESS, (data: unknown) => {
-      const d = data as { currentPosition: number; relativePosition: number };
-      setProgressRef.current(d.relativePosition);
-    });
-
-    widget.bind(events.ERROR, () => {
-      consecutiveErrorsRef.current += 1;
-      if (consecutiveErrorsRef.current <= 3) {
-        setTimeout(() => {
-          if (consecutiveErrorsRef.current > 0) {
-            nextRef.current();
-          }
-        }, 2000);
-      }
-    });
-  }, [sharedWidgetRef, volumeRef]);
-
-  // Wait for the SC script to load, then check if there is a pending track to
-  // set on the iframe (this covers the very first page load where playIndex
-  // fires before the script/iframe are available).
+  // Initialize widget OR load new track when currentTrack changes
   useEffect(() => {
-    if (!pendingTrackRef.current) return;
+    if (!currentTrack || !iframeRef.current) return;
+    if (loadedUrlRef.current === currentTrack.permalink_url) return;
 
     const waitForScript = () => {
       if (!scriptLoadedRef.current || !window.SC) {
         setTimeout(waitForScript, 100);
         return;
       }
-      if (pendingTrackRef.current && localIframeRef.current) {
-        const url = pendingTrackRef.current;
-        pendingTrackRef.current = null;
-        loadedUrlRef.current = url;
-        localIframeRef.current.src = `https://w.soundcloud.com/player/?url=${encodeURIComponent(url)}&auto_play=true`;
+
+      // ——— First-time initialisation: set iframe src and create widget ———
+      if (!widgetInitializedRef.current) {
+        const widgetUrl = `https://w.soundcloud.com/player/?url=${encodeURIComponent(currentTrack.permalink_url)}&auto_play=true`;
+        iframeRef.current!.src = widgetUrl;
+        loadedUrlRef.current = currentTrack.permalink_url;
+
+        const onIframeLoad = () => {
+          iframeRef.current?.removeEventListener("load", onIframeLoad);
+
+          const widget = window.SC.Widget(iframeRef.current!);
+          sharedWidgetRef.current = widget;
+          widgetInitializedRef.current = true;
+          isLoadingTrackRef.current = false;
+
+          const events = window.SC.Widget.Events;
+
+          widget.bind(events.READY, () => {
+            widget.setVolume(volumeRef.current);
+            widget.getDuration((d: number) => {
+              setDurationRef.current(d);
+            });
+            // Attempt auto-play — browsers may block this
+            widget.play();
+          });
+
+          widget.bind(events.PLAY, () => {
+            consecutiveErrorsRef.current = 0;
+            isLoadingTrackRef.current = false;
+            playbackEverStartedRef.current = true;
+            setIsPlayingRef.current(true);
+          });
+
+          widget.bind(events.PAUSE, () => {
+            setIsPlayingRef.current(false);
+          });
+
+          widget.bind(events.FINISH, () => {
+            nextRef.current();
+          });
+
+          widget.bind(events.PLAY_PROGRESS, (data: unknown) => {
+            const d = data as {
+              currentPosition: number;
+              relativePosition: number;
+            };
+            setProgressRef.current(d.relativePosition);
+          });
+
+          widget.bind(events.ERROR, () => {
+            consecutiveErrorsRef.current += 1;
+            if (consecutiveErrorsRef.current <= 3) {
+              setTimeout(() => {
+                if (consecutiveErrorsRef.current > 0) {
+                  nextRef.current();
+                }
+              }, 2000);
+            }
+          });
+        };
+
+        iframeRef.current!.addEventListener("load", onIframeLoad);
+      } else if (sharedWidgetRef.current) {
+        // ——— Widget already initialised: load new track via widget.load() ———
+        loadedUrlRef.current = currentTrack.permalink_url;
+        isLoadingTrackRef.current = true;
+
+        sharedWidgetRef.current.load(currentTrack.permalink_url, {
+          auto_play: true,
+          callback: () => {
+            isLoadingTrackRef.current = false;
+            sharedWidgetRef.current?.setVolume(volumeRef.current);
+            sharedWidgetRef.current?.getDuration((d: number) => {
+              setDurationRef.current(d);
+            });
+          },
+        });
       }
     };
+
     waitForScript();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentTrack]);
 
-  // Handle iframe load events — re-init the widget each time
-  useEffect(() => {
-    const iframe = localIframeRef.current;
-    if (!iframe) return;
-
-    const onLoad = () => {
-      // Only init if there is actually a src pointing to soundcloud
-      if (!iframe.src || !iframe.src.includes("soundcloud.com")) return;
-      // Wait for SC script
-      const doInit = () => {
-        if (!scriptLoadedRef.current || !window.SC) {
-          setTimeout(doInit, 100);
-          return;
-        }
-        initWidget();
-      };
-      doInit();
-    };
-
-    iframe.addEventListener("load", onLoad);
-    return () => iframe.removeEventListener("load", onLoad);
-  }, [initWidget]);
-
-  // Handle NEXT / PREVIOUS dispatches from the reducer.
-  // These change currentTrack but don't go through playIndex, so the iframe
-  // src hasn't been updated yet. We need to set it here.
-  useEffect(() => {
-    if (!currentTrack) return;
-    // If the loaded URL already matches, skip (playIndex already set the src)
-    if (loadedUrlRef.current === currentTrack.permalink_url) return;
-
-    // This is a next/previous action — set iframe src
-    loadedUrlRef.current = currentTrack.permalink_url;
-    if (localIframeRef.current) {
-      localIframeRef.current.src = `https://w.soundcloud.com/player/?url=${encodeURIComponent(currentTrack.permalink_url)}&auto_play=true`;
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentTrack]);
-
-  // On first user interaction, unlock the audio session and try to play.
-  // We keep trying on every interaction until the widget actually fires PLAY.
+  // Persistent "unlock & play" listener.
+  // On every user interaction we unlock the Web Audio API session and
+  // tell the widget to play.  We keep the listener active until the
+  // widget actually fires a PLAY event (playbackEverStartedRef).
   useEffect(() => {
     const tryPlay = () => {
       unlockAudioSession();
-      if (sharedWidgetRef.current) {
+      if (sharedWidgetRef.current && widgetInitializedRef.current) {
         sharedWidgetRef.current.play();
       }
-      if (playbackStartedRef.current) {
+      // Once playback has started at least once, remove listeners
+      if (playbackEverStartedRef.current) {
         document.removeEventListener("click", tryPlay, true);
         document.removeEventListener("touchstart", tryPlay, true);
       }
@@ -204,7 +176,9 @@ export default function SoundCloudWidget() {
 
   // Sync play/pause from user controls
   useEffect(() => {
-    if (!sharedWidgetRef.current || !currentTrack) return;
+    if (!sharedWidgetRef.current || !widgetInitializedRef.current || !currentTrack)
+      return;
+    if (isLoadingTrackRef.current) return;
 
     if (state.isPlaying) {
       sharedWidgetRef.current.play();
@@ -215,7 +189,7 @@ export default function SoundCloudWidget() {
 
   return (
     <iframe
-      ref={localIframeRef}
+      ref={iframeRef}
       id="sc-widget"
       width="0"
       height="0"

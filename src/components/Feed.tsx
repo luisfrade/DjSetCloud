@@ -1,5 +1,6 @@
 "use client";
 
+import { useRef, useState, useCallback } from "react";
 import { usePlayer } from "@/context/PlayerContext";
 import TrackCard from "./TrackCard";
 
@@ -7,10 +8,64 @@ interface FeedProps {
   onLoadMore: () => void;
   hasMore: boolean;
   isLoadingMore: boolean;
+  onRefresh?: () => void;
+  isRefreshing?: boolean;
 }
 
-export default function Feed({ onLoadMore, hasMore, isLoadingMore }: FeedProps) {
+const PULL_THRESHOLD = 80; // px the user must drag to trigger refresh
+
+export default function Feed({
+  onLoadMore,
+  hasMore,
+  isLoadingMore,
+  onRefresh,
+  isRefreshing,
+}: FeedProps) {
   const { state } = usePlayer();
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const touchStartY = useRef<number | null>(null);
+  const [pullDistance, setPullDistance] = useState(0);
+  const [pulling, setPulling] = useState(false);
+
+  // ——— Pull-to-refresh touch handlers ———
+  const onTouchStart = useCallback(
+    (e: React.TouchEvent) => {
+      if (!scrollRef.current || isRefreshing) return;
+      // Only activate when scrolled to the very top
+      if (scrollRef.current.scrollTop <= 0) {
+        touchStartY.current = e.touches[0].clientY;
+        setPulling(true);
+      }
+    },
+    [isRefreshing]
+  );
+
+  const onTouchMove = useCallback(
+    (e: React.TouchEvent) => {
+      if (touchStartY.current === null || !pulling || isRefreshing) return;
+      const dy = e.touches[0].clientY - touchStartY.current;
+      if (dy > 0) {
+        // Dampen the pull distance for a nicer feel
+        setPullDistance(Math.min(dy * 0.5, 120));
+      } else {
+        // User scrolled up — cancel pull
+        touchStartY.current = null;
+        setPulling(false);
+        setPullDistance(0);
+      }
+    },
+    [pulling, isRefreshing]
+  );
+
+  const onTouchEnd = useCallback(() => {
+    if (touchStartY.current === null) return;
+    if (pullDistance >= PULL_THRESHOLD && onRefresh && !isRefreshing) {
+      onRefresh();
+    }
+    touchStartY.current = null;
+    setPulling(false);
+    setPullDistance(0);
+  }, [pullDistance, onRefresh, isRefreshing]);
 
   if (state.isLoading) {
     return (
@@ -42,13 +97,52 @@ export default function Feed({ onLoadMore, hasMore, isLoadingMore }: FeedProps) 
   if (state.tracks.length === 0) {
     return (
       <div className="flex-1 flex items-center justify-center">
-        <p className="text-white/50 text-sm">No DJ sets found. Check back later.</p>
+        <p className="text-white/50 text-sm">
+          No DJ sets found. Check back later.
+        </p>
       </div>
     );
   }
 
+  const pastThreshold = pullDistance >= PULL_THRESHOLD;
+
   return (
-    <div className="flex-1 overflow-y-auto pb-28">
+    <div
+      ref={scrollRef}
+      className="flex-1 overflow-y-auto pb-28"
+      onTouchStart={onTouchStart}
+      onTouchMove={onTouchMove}
+      onTouchEnd={onTouchEnd}
+    >
+      {/* Pull-to-refresh indicator */}
+      <div
+        className="flex items-center justify-center overflow-hidden transition-[height] duration-200"
+        style={{ height: pulling || isRefreshing ? `${Math.max(pullDistance, isRefreshing ? 48 : 0)}px` : "0px" }}
+      >
+        <div className="flex items-center gap-2 text-white/40 text-sm py-2">
+          {isRefreshing ? (
+            <>
+              <div className="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+              <span>Refreshing...</span>
+            </>
+          ) : pastThreshold ? (
+            <>
+              <svg className="w-4 h-4 rotate-180 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+              </svg>
+              <span>Release to refresh</span>
+            </>
+          ) : (
+            <>
+              <svg className="w-4 h-4 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+              </svg>
+              <span>Pull to refresh</span>
+            </>
+          )}
+        </div>
+      </div>
+
       <div className="max-w-3xl mx-auto px-4 py-4 space-y-1">
         {state.tracks.map((track, index) => (
           <TrackCard key={track.id} track={track} index={index} />

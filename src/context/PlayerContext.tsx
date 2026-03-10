@@ -28,7 +28,7 @@ const initialState: PlayerState = {
   duration: 0,
   isLoading: true,
   error: null,
-  shuffle: true, // will be overridden by localStorage on mount
+  shuffle: true,
   playHistory: [],
 };
 
@@ -141,18 +141,11 @@ function playerReducer(state: PlayerState, action: PlayerAction): PlayerState {
   }
 }
 
-/** Build the SC Widget player URL for an iframe src */
-function buildWidgetUrl(permalinkUrl: string): string {
-  return `https://w.soundcloud.com/player/?url=${encodeURIComponent(permalinkUrl)}&auto_play=true`;
-}
-
 interface PlayerContextValue {
   state: PlayerState;
   widgetRef: MutableRefObject<SCWidgetInstance | null>;
-  iframeRef: MutableRefObject<HTMLIFrameElement | null>;
   volumeRef: MutableRefObject<number>;
   loadedUrlRef: MutableRefObject<string | null>;
-  pendingTrackRef: MutableRefObject<string | null>;
   setTracks: (tracks: Track[]) => void;
   appendTracks: (tracks: Track[]) => void;
   refreshTracks: (tracks: Track[]) => void;
@@ -178,12 +171,9 @@ const PlayerContext = createContext<PlayerContextValue | null>(null);
 export function PlayerProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(playerReducer, initialState);
   const widgetRef = useRef<SCWidgetInstance | null>(null);
-  const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const volumeRef = useRef(initialState.volume);
   const tracksRef = useRef(state.tracks);
   const loadedUrlRef = useRef<string | null>(null);
-  // Tracks a URL that should play once the widget initialises (first load)
-  const pendingTrackRef = useRef<string | null>(null);
 
   // Keep refs in sync
   volumeRef.current = state.volume;
@@ -209,21 +199,28 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   );
 
   /**
-   * playIndex — the core iOS fix.
-   *
-   * Instead of calling widget.load() via postMessage (which iOS does not treat
-   * as a user gesture), we directly set the iframe's `src` attribute.  Setting
-   * `iframe.src` inside a click handler IS a user-initiated navigation, so iOS
-   * honours the `auto_play=true` parameter on the SoundCloud player URL.
-   *
-   * The SoundCloudWidget component listens for iframe load events and
-   * re-initialises the widget instance + re-binds events after each src change.
+   * Verify that playback actually started.  If the widget is still paused
+   * after a short delay (e.g. iOS blocked autoplay silently), reset
+   * isPlaying so the UI shows the play button instead of the pause button.
+   */
+  const verifyPlayback = useCallback(() => {
+    setTimeout(() => {
+      widgetRef.current?.isPaused((paused: boolean) => {
+        if (paused) {
+          dispatch({ type: "SET_PLAYING", isPlaying: false });
+        }
+      });
+    }, 1500);
+  }, []);
+
+  /**
+   * playIndex — loads a new track using widget.load() (preserves the widget
+   * instance) and calls unlockAudioSession() to activate the iOS audio
+   * session within the gesture handler.
    */
   const playIndex = useCallback(
     (index: number) => {
-      // Unlock the iOS audio session inside the gesture handler
       unlockAudioSession();
-
       dispatch({ type: "PLAY_INDEX", index });
 
       const track = tracksRef.current[index];
@@ -231,15 +228,22 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 
       loadedUrlRef.current = track.permalink_url;
 
-      if (iframeRef.current) {
-        // Direct src change — user-initiated navigation for iOS
-        iframeRef.current.src = buildWidgetUrl(track.permalink_url);
-      } else {
-        // Widget not mounted yet — store for later
-        pendingTrackRef.current = track.permalink_url;
+      if (widgetRef.current) {
+        widgetRef.current.load(track.permalink_url, {
+          auto_play: true,
+          callback: () => {
+            widgetRef.current?.setVolume(volumeRef.current);
+            widgetRef.current?.getDuration((d: number) => {
+              dispatch({ type: "SET_DURATION", duration: d });
+            });
+          },
+        });
       }
+
+      // Check if playback actually started (iOS may block silently)
+      verifyPlayback();
     },
-    []
+    [verifyPlayback]
   );
 
   const playTrack = useCallback(
@@ -254,7 +258,9 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     unlockAudioSession();
     dispatch({ type: "SET_PLAYING", isPlaying: true });
     widgetRef.current?.play();
-  }, []);
+    // Verify playback actually started
+    verifyPlayback();
+  }, [verifyPlayback]);
 
   const pause = useCallback(() => {
     dispatch({ type: "SET_PLAYING", isPlaying: false });
@@ -314,10 +320,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       value={{
         state,
         widgetRef,
-        iframeRef,
         volumeRef,
         loadedUrlRef,
-        pendingTrackRef,
         setTracks,
         appendTracks,
         refreshTracks,

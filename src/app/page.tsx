@@ -122,6 +122,8 @@ export default function Home() {
         onLoadMore={handleLoadMore}
         hasMore={nextOffset !== null}
         isLoadingMore={isLoadingMore}
+        onRefresh={handleRefresh}
+        isRefreshing={isRefreshing}
       />
 
       {/* Player */}
