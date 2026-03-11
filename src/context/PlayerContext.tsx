@@ -568,7 +568,14 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
           await audio.play();
           return;
         } catch (err) {
-          // Cached URL may be stale — clear and try fresh
+          // NotAllowedError = autoplay blocked by browser policy (e.g. iOS
+          // Safari on initial load without a user gesture).  The audio src
+          // is loaded and valid — the user just needs to tap play.
+          if (err instanceof DOMException && err.name === "NotAllowedError") {
+            dispatch({ type: "SET_PLAYING", isPlaying: false });
+            return; // track is ready, just paused — don't clear cache
+          }
+          // Other error (stale URL, network, etc.) — clear cache and retry
           streamCacheRef.current.delete(track.id);
           console.warn("Cached URL failed, retrying fresh:", err);
           isResolvingRef.current = true;
@@ -607,6 +614,11 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         await audio.play();
       } catch (err) {
         isResolvingRef.current = false;
+        // NotAllowedError = autoplay blocked — track is loaded, just paused
+        if (err instanceof DOMException && err.name === "NotAllowedError") {
+          dispatch({ type: "SET_PLAYING", isPlaying: false });
+          return; // don't throw — track is ready for user gesture
+        }
         console.warn("loadAndPlay failed:", err);
         dispatch({ type: "SET_PLAYING", isPlaying: false });
         throw err; // let caller handle
