@@ -12,6 +12,20 @@ import {
 import { Track, PlayerState, PlayerAction, YTPlayer } from "@/types";
 
 /* ------------------------------------------------------------------ */
+/*  iOS Safari audio unlock                                            */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Tiny silent WAV (mono, 44100 Hz, 16-bit, 2 samples of silence).
+ * Playing this from a user gesture "activates" the HTML5 Audio element
+ * on iOS Safari, so a later programmatic play() (after an async fetch)
+ * is allowed. Without this, iOS blocks audio.play() calls that happen
+ * outside the synchronous call-stack of a user interaction.
+ */
+const SILENCE_DATA_URI =
+  "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAZGF0YQQAAAAAAA==";
+
+/* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
 /* ------------------------------------------------------------------ */
 
@@ -235,12 +249,16 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 
     const onEnded = () => {
       if (activeEngineRef.current !== "audio") return;
+      // Ignore ended events during warm-up / stream resolution
+      // (e.g. the tiny silence clip ending before the real track loads)
+      if (isResolvingRef.current) return;
       nextRef.current();
     };
 
     const onError = () => {
       if (activeEngineRef.current !== "audio") return;
       if (!audio.src || audio.src === "") return; // ignore empty src errors
+      if (isResolvingRef.current) return; // ignore errors during warm-up
       console.error("Audio playback error:", audio.error?.message);
       consecutiveErrorsRef.current += 1;
       if (consecutiveErrorsRef.current <= 3) {
@@ -412,6 +430,14 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         return;
       }
 
+      // iOS Safari fix: "activate" the Audio element in the user gesture
+      // context BEFORE the async stream-resolution fetch. We play a tiny
+      // silence clip synchronously in the gesture call-stack; this tells
+      // iOS that a user interaction intends to produce audio, so the
+      // subsequent programmatic play() after the fetch is permitted.
+      audio.src = SILENCE_DATA_URI;
+      audio.play().catch(() => {});
+
       try {
         const res = await fetch(
           `/api/stream?id=${encodeURIComponent(track.id)}`
@@ -480,8 +506,20 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         /* ignore */
       }
     } else {
-      audioRef.current?.play().catch(() => {
+      const audio = audioRef.current;
+      if (!audio) {
         dispatch({ type: "SET_PLAYING", isPlaying: false });
+        return;
+      }
+      audio.play().catch(() => {
+        // On iOS, a play() may occasionally fail if the audio element
+        // lost its "activated" state (e.g. after long backgrounding).
+        // Retry once after a brief delay as the gesture may still be valid.
+        setTimeout(() => {
+          audio.play().catch(() => {
+            dispatch({ type: "SET_PLAYING", isPlaying: false });
+          });
+        }, 150);
       });
     }
   }, []);
