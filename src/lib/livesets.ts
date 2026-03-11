@@ -68,18 +68,26 @@ export async function fetchLivesetsTracks(): Promise<Track[]> {
         // Filter by duration (>= 40 min)
         if (session.durationSec < MIN_DURATION_SEC) continue;
 
+        // Build a descriptive title instead of generic "Session #X"
+        const artist = session.artist || session.username;
+        const genreLabel =
+          session.genres.length > 0 && session.genres[0] !== "Unknown"
+            ? session.genres.join(" / ") + " Mix"
+            : "DJ Set";
+        const descriptiveTitle = `${artist} — ${genreLabel}`;
+
         results.push({
           id: `ls-${session.sessionId}`,
           source: "livesets",
-          title: session.title,
+          title: descriptiveTitle,
           permalink_url: `${BASE}/${session.username}/session/${session.sessionId}`,
-          artwork_url: session.thumbnailUrl || null,
+          artwork_url: null, // will use generated artwork
           duration: session.durationSec * 1000, // seconds → ms
           created_at: parseRelativeDate(session.timeAgo),
           genre: session.genres.join(", "),
           user: {
-            username: session.artist || session.username,
-            avatar_url: session.thumbnailUrl || "",
+            username: artist,
+            avatar_url: "",
           },
         });
       }

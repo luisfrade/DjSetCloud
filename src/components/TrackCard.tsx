@@ -3,6 +3,7 @@
 import { Track } from "@/types";
 import { formatDuration, formatDate } from "@/lib/formatters";
 import { usePlayer } from "@/context/PlayerContext";
+import GeneratedArtwork from "@/components/GeneratedArtwork";
 
 interface TrackCardProps {
   track: Track;
@@ -76,11 +77,11 @@ export default function TrackCard({ track, index }: TrackCardProps) {
             className="w-full h-full object-cover"
           />
         ) : (
-          <div className="w-full h-full flex items-center justify-center text-white/30">
-            <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
-              <path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z" />
-            </svg>
-          </div>
+          <GeneratedArtwork
+            genre={track.genre || ""}
+            title={track.title}
+            size="sm"
+          />
         )}
         {isActive && state.isPlaying && (
           <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
