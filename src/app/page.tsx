@@ -21,6 +21,7 @@ export default function Home() {
     setIsLoading,
     cacheStreamUrls,
     preloadStreams,
+    preBufferAudio,
   } = usePlayer();
   const [nextOffset, setNextOffset] = useState<number | null>(null);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -36,7 +37,12 @@ export default function Home() {
 
     setIsLoading(true);
 
-    fetch("/api/tracks")
+    // Send shuffle preference so the server can pick the autoplay track
+    // and guarantee its stream URL is pre-resolved in the response.
+    const shuffle = localStorage.getItem("djsetcloud-shuffle");
+    const isShuffleOn = shuffle === null ? true : shuffle === "true";
+
+    fetch(`/api/tracks?shuffle=${isShuffleOn}`)
       .then((res) => {
         if (!res.ok) throw new Error("Failed to load tracks");
         return res.json();
@@ -51,13 +57,21 @@ export default function Home() {
           cacheStreamUrls(data.preloadedStreams);
         }
 
-        // Auto-play: random track if shuffle on, otherwise first (newest)
         if (data.tracks.length > 0) {
-          const shuffle = localStorage.getItem("djsetcloud-shuffle");
-          const isShuffleOn = shuffle === null ? true : shuffle === "true";
-          const startIndex = isShuffleOn
-            ? Math.floor(Math.random() * data.tracks.length)
-            : 0;
+          // Use the server-determined autoplay index — the server already
+          // pre-resolved this track's stream URL so playback is near-instant.
+          const startIndex = data.autoplayIndex ?? 0;
+          const startTrack = data.tracks[startIndex];
+
+          // Start pre-buffering the autoplay track's audio data on a hidden
+          // Audio element BEFORE calling playIndex.  When loadAndPlay later
+          // sets the same URL on the main Audio element, the browser HTTP
+          // cache serves the already-downloading data — drastically reducing
+          // time-to-first-play.
+          if (startTrack && data.preloadedStreams?.[startTrack.id]) {
+            preBufferAudio(startTrack.id, data.preloadedStreams[startTrack.id]);
+          }
+
           playIndex(startIndex);
 
           // Pre-fetch stream URLs for more tracks in the background
@@ -68,7 +82,7 @@ export default function Home() {
       .catch((err) => {
         setError(err.message || "Failed to load tracks");
       });
-  }, [setTracks, playIndex, setError, setIsLoading, cacheStreamUrls, preloadStreams]);
+  }, [setTracks, playIndex, setError, setIsLoading, cacheStreamUrls, preloadStreams, preBufferAudio]);
 
   const handleRefresh = useCallback(() => {
     if (isRefreshing) return;

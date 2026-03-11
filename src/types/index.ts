@@ -18,6 +18,10 @@ export interface TracksResponse {
   nextOffset: number | null;
   /** Pre-resolved stream URLs for the first few audio tracks (keyed by track id). */
   preloadedStreams?: Record<string, string>;
+  /** Index into `tracks` that the client should auto-play on load.
+   *  The server picks it (random for shuffle, 0 for sequential) and
+   *  guarantees the corresponding stream URL is in `preloadedStreams`. */
+  autoplayIndex?: number;
 }
 
 export interface PlayerState {

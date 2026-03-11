@@ -173,6 +173,9 @@ interface PlayerContextValue {
   cacheStreamUrls: (map: Record<string, string>) => void;
   /** Fire background fetches for the given tracks' stream URLs. */
   preloadStreams: (tracks: Track[]) => void;
+  /** Start pre-buffering audio data for a specific track on a hidden Audio element.
+   *  The browser HTTP cache will serve this data when loadAndPlay later requests it. */
+  preBufferAudio: (trackId: string, url: string) => void;
   /* YouTube IFrame Player integration */
   onYTReady: (player: YTPlayer) => void;
   onYTStateChange: (ytState: number) => void;
@@ -446,6 +449,24 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 
       streamCacheRef.current.set(track.id, promise);
     }
+  }, []);
+
+  /**
+   * Start pre-buffering audio data for a specific track using a pool element.
+   * Call this as early as possible (e.g. right after receiving the API response)
+   * so the browser begins downloading audio data.  When loadAndPlay later sets
+   * the same URL on the main Audio element, the browser's HTTP cache serves the
+   * data near-instantly, drastically reducing time-to-first-play.
+   */
+  const preBufferAudio = useCallback((trackId: string, url: string) => {
+    const pool = preloadPoolRef.current;
+    if (pool.length === 0) return;
+
+    // Use the first pool slot for the autoplay track (highest priority)
+    const el = pool[0];
+    el.setAttribute("data-track-id", trackId);
+    el.src = url;
+    el.load(); // explicitly start the download
   }, []);
 
   /* ---- Seek (fraction 0–1) — route to active engine ---- */
@@ -909,6 +930,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         currentTrack,
         cacheStreamUrls,
         preloadStreams,
+        preBufferAudio,
         onYTReady,
         onYTStateChange,
         onYTError,
