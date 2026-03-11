@@ -396,7 +396,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         pendingYTLoadRef.current = videoId;
       }
     } else {
-      /* ---- SoundCloud: use HTML5 Audio ---- */
+      /* ---- SoundCloud / Livesets: use HTML5 Audio ---- */
 
       // Stop the YT engine
       try {

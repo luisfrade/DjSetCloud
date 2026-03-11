@@ -27,6 +27,15 @@ function SoundCloudIcon({ className }: { className?: string }) {
   );
 }
 
+/* Livesets icon (headphones) */
+function LivesetsIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="currentColor">
+      <path d="M12 1a9 9 0 00-9 9v7c0 1.66 1.34 3 3 3h3v-8H5v-2c0-3.87 3.13-7 7-7s7 3.13 7 7v2h-4v8h3c1.66 0 3-1.34 3-3v-7a9 9 0 00-9-9z" />
+    </svg>
+  );
+}
+
 export default function TrackCard({ track, index }: TrackCardProps) {
   const { state, playIndex, play } = usePlayer();
   const isActive = state.currentIndex === index;
@@ -40,11 +49,12 @@ export default function TrackCard({ track, index }: TrackCardProps) {
   };
 
   const isYouTube = track.source === "youtube";
+  const isLivesets = track.source === "livesets";
 
   const artworkUrl = track.artwork_url
-    ? isYouTube
-      ? track.artwork_url
-      : track.artwork_url.replace("-large", "-t200x200")
+    ? track.source === "soundcloud"
+      ? track.artwork_url.replace("-large", "-t200x200")
+      : track.artwork_url
     : null;
 
   return (
@@ -111,13 +121,17 @@ export default function TrackCard({ track, index }: TrackCardProps) {
           className={`p-1 transition-colors ${
             isYouTube
               ? "text-white/20 hover:text-red-400"
-              : "text-white/20 hover:text-orange-400"
+              : isLivesets
+                ? "text-white/20 hover:text-green-400"
+                : "text-white/20 hover:text-orange-400"
           }`}
-          title={isYouTube ? "Open on YouTube" : "Open on SoundCloud"}
-          aria-label={isYouTube ? "Open on YouTube" : "Open on SoundCloud"}
+          title={isYouTube ? "Open on YouTube" : isLivesets ? "Open on Livesets" : "Open on SoundCloud"}
+          aria-label={isYouTube ? "Open on YouTube" : isLivesets ? "Open on Livesets" : "Open on SoundCloud"}
         >
           {isYouTube ? (
             <YouTubeIcon className="w-4 h-4" />
+          ) : isLivesets ? (
+            <LivesetsIcon className="w-4 h-4" />
           ) : (
             <SoundCloudIcon className="w-4 h-4" />
           )}

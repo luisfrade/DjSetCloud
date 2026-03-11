@@ -52,11 +52,12 @@ export default function Player({
   if (!currentTrack) return null;
 
   const isYouTube = currentTrack.source === "youtube";
+  const isLivesets = currentTrack.source === "livesets";
 
   const artworkUrl = currentTrack.artwork_url
-    ? isYouTube
-      ? currentTrack.artwork_url
-      : currentTrack.artwork_url.replace("-large", "-t200x200")
+    ? currentTrack.source === "soundcloud"
+      ? currentTrack.artwork_url.replace("-large", "-t200x200")
+      : currentTrack.artwork_url
     : null;
 
   const currentTime = state.duration * state.progress;
@@ -113,7 +114,7 @@ export default function Player({
               {currentTrack.user.username}
             </p>
           </div>
-          {/* Source link (SC or YT) */}
+          {/* Source link (SC, YT, or Livesets) */}
           <a
             href={currentTrack.permalink_url}
             target="_blank"
@@ -121,10 +122,12 @@ export default function Player({
             className={`flex-shrink-0 p-1.5 transition-colors ${
               isYouTube
                 ? "text-white/30 hover:text-red-400"
-                : "text-white/30 hover:text-orange-400"
+                : isLivesets
+                  ? "text-white/30 hover:text-green-400"
+                  : "text-white/30 hover:text-orange-400"
             }`}
-            title={isYouTube ? "Open on YouTube" : "Open on SoundCloud"}
-            aria-label={isYouTube ? "Open on YouTube" : "Open on SoundCloud"}
+            title={isYouTube ? "Open on YouTube" : isLivesets ? "Open on Livesets" : "Open on SoundCloud"}
+            aria-label={isYouTube ? "Open on YouTube" : isLivesets ? "Open on Livesets" : "Open on SoundCloud"}
           >
             {isYouTube ? (
               <svg
@@ -133,6 +136,14 @@ export default function Player({
                 fill="currentColor"
               >
                 <path d="M23.498 6.186a3.016 3.016 0 00-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 00.502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 002.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 002.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z" />
+              </svg>
+            ) : isLivesets ? (
+              <svg
+                className="w-4 h-4"
+                viewBox="0 0 24 24"
+                fill="currentColor"
+              >
+                <path d="M12 1a9 9 0 00-9 9v7c0 1.66 1.34 3 3 3h3v-8H5v-2c0-3.87 3.13-7 7-7s7 3.13 7 7v2h-4v8h3c1.66 0 3-1.34 3-3v-7a9 9 0 00-9-9z" />
               </svg>
             ) : (
               <svg
@@ -265,27 +276,6 @@ export default function Player({
           )}
         </div>
 
-        {/* Clock mode */}
-        {onClockToggle && (
-          <button
-            onClick={onClockToggle}
-            className="p-2 text-white/30 hover:text-blue-400 transition-colors"
-            aria-label="Clock mode"
-            title="Clock mode"
-          >
-            <svg
-              className="w-5 h-5"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-              strokeWidth={2}
-            >
-              <circle cx="12" cy="12" r="10" />
-              <polyline points="12 6 12 12 16 14" />
-            </svg>
-          </button>
-        )}
-
         {/* Shuffle */}
         <button
           onClick={() => setShuffle(!state.shuffle)}
@@ -323,6 +313,27 @@ export default function Player({
                 strokeLinejoin="round"
                 d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
               />
+            </svg>
+          </button>
+        )}
+
+        {/* Clock mode */}
+        {onClockToggle && (
+          <button
+            onClick={onClockToggle}
+            className="p-2 text-white/30 hover:text-blue-400 transition-colors"
+            aria-label="Clock mode"
+            title="Clock mode"
+          >
+            <svg
+              className="w-5 h-5"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+              strokeWidth={2}
+            >
+              <circle cx="12" cy="12" r="10" />
+              <polyline points="12 6 12 12 16 14" />
             </svg>
           </button>
         )}

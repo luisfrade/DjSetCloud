@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { fetchSoundCloudTracks } from "@/lib/soundcloud";
 import { fetchYouTubeTracks } from "@/lib/youtube";
+import { fetchLivesetsTracks } from "@/lib/livesets";
 import { Track } from "@/types";
 
 export async function GET(request: NextRequest) {
@@ -12,10 +13,11 @@ export async function GET(request: NextRequest) {
   );
 
   try {
-    // Fetch from both sources in parallel
-    const [scResult, ytResult] = await Promise.allSettled([
+    // Fetch from all sources in parallel
+    const [scResult, ytResult, lsResult] = await Promise.allSettled([
       fetchSoundCloudTracks(),
       fetchYouTubeTracks(),
+      fetchLivesetsTracks(),
     ]);
 
     const allTracks: Track[] = [];
@@ -30,6 +32,12 @@ export async function GET(request: NextRequest) {
       allTracks.push(...ytResult.value);
     } else {
       console.error("YouTube fetch failed:", ytResult.reason);
+    }
+
+    if (lsResult.status === "fulfilled") {
+      allTracks.push(...lsResult.value);
+    } else {
+      console.error("Livesets fetch failed:", lsResult.reason);
     }
 
     if (allTracks.length === 0) {

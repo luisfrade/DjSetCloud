@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { resolveSoundCloudStreamUrl } from "@/lib/soundcloud";
+import { resolveLivesetsStreamUrl } from "@/lib/livesets";
 
 /**
- * Resolve a direct stream URL for a SoundCloud track.
+ * Resolve a direct stream URL for a SoundCloud or Livesets track.
  * YouTube tracks use the IFrame Player API (client-side) and don't need this endpoint.
  */
 export async function GET(request: NextRequest) {
@@ -15,23 +16,34 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  if (!id.startsWith("sc-")) {
-    return NextResponse.json(
-      { error: "Only SoundCloud stream resolution is supported" },
-      { status: 400 }
-    );
-  }
-
   try {
-    const numericId = parseInt(id.slice(3), 10);
-    if (isNaN(numericId)) {
+    let url: string;
+
+    if (id.startsWith("sc-")) {
+      const numericId = parseInt(id.slice(3), 10);
+      if (isNaN(numericId)) {
+        return NextResponse.json(
+          { error: "Invalid SoundCloud track ID" },
+          { status: 400 }
+        );
+      }
+      url = await resolveSoundCloudStreamUrl(numericId);
+    } else if (id.startsWith("ls-")) {
+      const sessionId = id.slice(3);
+      if (!sessionId) {
+        return NextResponse.json(
+          { error: "Invalid Livesets session ID" },
+          { status: 400 }
+        );
+      }
+      url = await resolveLivesetsStreamUrl(sessionId);
+    } else {
       return NextResponse.json(
-        { error: "Invalid SoundCloud track ID" },
+        { error: "Invalid track ID format — expected sc-* or ls-*" },
         { status: 400 }
       );
     }
 
-    const url = await resolveSoundCloudStreamUrl(numericId);
     return NextResponse.json({ url });
   } catch (err) {
     console.error("Stream resolution failed for", id, ":", err);
