@@ -69,48 +69,13 @@ export async function GET(request: NextRequest) {
     const nextOffset =
       offset + limit < unique.length ? offset + limit : null;
 
-    // ---- Determine autoplay index for the first page ----
-    // The client sends its shuffle preference so we can pick the right
-    // starting track and guarantee its stream URL is pre-resolved.
-    const shuffleParam = searchParams.get("shuffle");
-    const isShuffleOn = shuffleParam === null ? true : shuffleParam !== "false";
-
-    let autoplayIndex: number | undefined;
-    if (offset === 0 && paginated.length > 0) {
-      autoplayIndex = isShuffleOn
-        ? Math.floor(Math.random() * paginated.length)
-        : 0;
-    }
-
     // Pre-resolve stream URLs for the first few audio tracks so the
     // client can start playback without an extra /api/stream round-trip.
-    // The autoplay track is always included (and resolved first) so the
-    // very first play is as fast as possible.
+    // The first track (newest) is always included since it auto-plays on load.
     const preloadedStreams: Record<string, string> = {};
     if (offset === 0) {
-      const autoplayTrack =
-        autoplayIndex !== undefined ? paginated[autoplayIndex] : null;
-
-      // Build preload list: autoplay track first, then fill with earliest
-      // audio tracks up to 5 total.
-      const toPreload: Track[] = [];
-      const preloadIds = new Set<string>();
-
-      const addToPreload = (t: Track) => {
-        if (t.source === "youtube") return; // YT uses IFrame API, no stream URL
-        if (preloadIds.has(t.id)) return;
-        preloadIds.add(t.id);
-        toPreload.push(t);
-      };
-
-      // Autoplay track is top priority
-      if (autoplayTrack) addToPreload(autoplayTrack);
-
-      // Fill remaining slots with the first audio tracks in the page
-      for (const t of paginated) {
-        if (toPreload.length >= 5) break;
-        addToPreload(t);
-      }
+      const audioTracks = paginated.filter((t) => t.source !== "youtube");
+      const toPreload = audioTracks.slice(0, 5);
 
       const results = await Promise.allSettled(
         toPreload.map(async (track) => {
@@ -137,7 +102,6 @@ export async function GET(request: NextRequest) {
     const response = NextResponse.json({
       tracks: paginated,
       nextOffset,
-      ...(autoplayIndex !== undefined && { autoplayIndex }),
       ...(Object.keys(preloadedStreams).length > 0 && { preloadedStreams }),
     });
     // Prevent any caching — always return fresh data

@@ -37,12 +37,7 @@ export default function Home() {
 
     setIsLoading(true);
 
-    // Send shuffle preference so the server can pick the autoplay track
-    // and guarantee its stream URL is pre-resolved in the response.
-    const shuffle = localStorage.getItem("djsetcloud-shuffle");
-    const isShuffleOn = shuffle === null ? true : shuffle === "true";
-
-    fetch(`/api/tracks?shuffle=${isShuffleOn}`)
+    fetch("/api/tracks")
       .then((res) => {
         if (!res.ok) throw new Error("Failed to load tracks");
         return res.json();
@@ -58,10 +53,8 @@ export default function Home() {
         }
 
         if (data.tracks.length > 0) {
-          // Use the server-determined autoplay index — the server already
-          // pre-resolved this track's stream URL so playback is near-instant.
-          const startIndex = data.autoplayIndex ?? 0;
-          const startTrack = data.tracks[startIndex];
+          // Always auto-play the first track (newest in the feed).
+          const startTrack = data.tracks[0];
 
           // Start pre-buffering the autoplay track's audio data on a hidden
           // Audio element BEFORE calling playIndex.  When loadAndPlay later
@@ -72,7 +65,7 @@ export default function Home() {
             preBufferAudio(startTrack.id, data.preloadedStreams[startTrack.id]);
           }
 
-          playIndex(startIndex);
+          playIndex(0);
 
           // Pre-fetch stream URLs for more tracks in the background
           // so subsequent plays are instant.
