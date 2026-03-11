@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { fetchSoundCloudTracks } from "@/lib/soundcloud";
+import { fetchSoundCloudTracks, resolveSoundCloudStreamUrl } from "@/lib/soundcloud";
 import { fetchYouTubeTracks } from "@/lib/youtube";
-import { fetchLivesetsTracks } from "@/lib/livesets";
+import { fetchLivesetsTracks, resolveLivesetsStreamUrl } from "@/lib/livesets";
 import { Track } from "@/types";
 
 // Ensure this route is always dynamic (never cached by Vercel)
@@ -69,7 +69,41 @@ export async function GET(request: NextRequest) {
     const nextOffset =
       offset + limit < unique.length ? offset + limit : null;
 
-    const response = NextResponse.json({ tracks: paginated, nextOffset });
+    // Pre-resolve stream URLs for the first few audio tracks so the
+    // client can start playback without an extra /api/stream round-trip.
+    // Only for the first page (offset 0) to keep subsequent loads fast.
+    const preloadedStreams: Record<string, string> = {};
+    if (offset === 0) {
+      const audioTracks = paginated.filter((t) => t.source !== "youtube");
+      const toPreload = audioTracks.slice(0, 5);
+
+      const results = await Promise.allSettled(
+        toPreload.map(async (track) => {
+          if (track.source === "soundcloud") {
+            const numericId = parseInt(track.id.slice(3), 10);
+            const url = await resolveSoundCloudStreamUrl(numericId);
+            return { id: track.id, url };
+          } else if (track.source === "livesets") {
+            const sessionId = track.id.slice(3);
+            const url = await resolveLivesetsStreamUrl(sessionId);
+            return { id: track.id, url };
+          }
+          return null;
+        })
+      );
+
+      for (const result of results) {
+        if (result.status === "fulfilled" && result.value) {
+          preloadedStreams[result.value.id] = result.value.url;
+        }
+      }
+    }
+
+    const response = NextResponse.json({
+      tracks: paginated,
+      nextOffset,
+      ...(Object.keys(preloadedStreams).length > 0 && { preloadedStreams }),
+    });
     // Prevent any caching — always return fresh data
     response.headers.set(
       "Cache-Control",

@@ -19,6 +19,8 @@ export default function Home() {
     playIndex,
     setError,
     setIsLoading,
+    cacheStreamUrls,
+    preloadStreams,
   } = usePlayer();
   const [nextOffset, setNextOffset] = useState<number | null>(null);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -42,6 +44,13 @@ export default function Home() {
       .then((data: TracksResponse) => {
         setTracks(data.tracks);
         setNextOffset(data.nextOffset);
+
+        // Seed the stream URL cache with any URLs pre-resolved by the server.
+        // This eliminates the /api/stream round-trip for the first tracks.
+        if (data.preloadedStreams) {
+          cacheStreamUrls(data.preloadedStreams);
+        }
+
         // Auto-play: random track if shuffle on, otherwise first (newest)
         if (data.tracks.length > 0) {
           const shuffle = localStorage.getItem("djsetcloud-shuffle");
@@ -50,12 +59,16 @@ export default function Home() {
             ? Math.floor(Math.random() * data.tracks.length)
             : 0;
           playIndex(startIndex);
+
+          // Pre-fetch stream URLs for more tracks in the background
+          // so subsequent plays are instant.
+          preloadStreams(data.tracks);
         }
       })
       .catch((err) => {
         setError(err.message || "Failed to load tracks");
       });
-  }, [setTracks, playIndex, setError, setIsLoading]);
+  }, [setTracks, playIndex, setError, setIsLoading, cacheStreamUrls, preloadStreams]);
 
   const handleRefresh = useCallback(() => {
     if (isRefreshing) return;

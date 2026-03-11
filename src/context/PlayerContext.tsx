@@ -169,6 +169,10 @@ interface PlayerContextValue {
   setError: (e: string | null) => void;
   setIsLoading: (b: boolean) => void;
   currentTrack: Track | null;
+  /** Seed the stream URL cache with pre-resolved URLs (e.g. from API response). */
+  cacheStreamUrls: (map: Record<string, string>) => void;
+  /** Fire background fetches for the given tracks' stream URLs. */
+  preloadStreams: (tracks: Track[]) => void;
   /* YouTube IFrame Player integration */
   onYTReady: (player: YTPlayer) => void;
   onYTStateChange: (ytState: number) => void;
@@ -196,6 +200,14 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const volumeRef = useRef(initialState.volume);
   const consecutiveErrorsRef = useRef(0);
   const isResolvingRef = useRef(false);
+
+  /**
+   * Client-side stream URL cache.
+   * Stores either a resolved URL (string) or a pending fetch (Promise<string>).
+   * Used by loadAndPlay to skip the /api/stream round-trip when the URL
+   * was pre-resolved server-side or pre-fetched in the background.
+   */
+  const streamCacheRef = useRef(new Map<string, string | Promise<string>>());
 
   // Keep refs in sync
   tracksRef.current = state.tracks;
@@ -364,6 +376,50 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  /* ---- Stream URL cache helpers ---- */
+
+  /** Seed the cache with URLs that were pre-resolved server-side. */
+  const cacheStreamUrls = useCallback((map: Record<string, string>) => {
+    for (const [id, url] of Object.entries(map)) {
+      streamCacheRef.current.set(id, url);
+    }
+  }, []);
+
+  /**
+   * Fire background fetches for the given tracks' stream URLs.
+   * Resolved URLs are stored in the cache so loadAndPlay can skip the
+   * /api/stream round-trip.  Only non-YouTube tracks are preloaded.
+   */
+  const preloadStreams = useCallback((tracks: Track[]) => {
+    const audioTracks = tracks.filter((t) => t.source !== "youtube");
+    // Preload up to 8 tracks beyond whatever the server already cached
+    const toPreload = audioTracks
+      .filter((t) => !streamCacheRef.current.has(t.id))
+      .slice(0, 8);
+
+    for (const track of toPreload) {
+      const promise = fetch(`/api/stream?id=${encodeURIComponent(track.id)}`)
+        .then((res) => {
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          return res.json();
+        })
+        .then((data: { url?: string }) => {
+          const url = data.url;
+          if (!url) throw new Error("Empty stream URL");
+          // Replace promise with resolved string for instant access
+          streamCacheRef.current.set(track.id, url);
+          return url;
+        })
+        .catch((err) => {
+          // Remove failed entry so loadAndPlay falls back to a fresh fetch
+          streamCacheRef.current.delete(track.id);
+          throw err;
+        });
+
+      streamCacheRef.current.set(track.id, promise);
+    }
+  }, []);
+
   /* ---- Seek (fraction 0–1) — route to active engine ---- */
   const seekTo = useCallback((fraction: number) => {
     if (activeEngineRef.current === "youtube") {
@@ -382,6 +438,23 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         audio.currentTime = fraction * audio.duration;
       }
     }
+  }, []);
+
+  /* ---- Helper: fetch a fresh stream URL from the API ---- */
+  const freshStreamFetch = useCallback(async (trackId: string): Promise<string> => {
+    const res = await fetch(`/api/stream?id=${encodeURIComponent(trackId)}`);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(
+        (data as { error?: string }).error ||
+          `Stream resolution HTTP ${res.status}`
+      );
+    }
+    const data = await res.json();
+    if (!data.url) throw new Error("Empty stream URL");
+    // Cache for potential reuse (e.g. play → pause → play)
+    streamCacheRef.current.set(trackId, data.url);
+    return data.url;
   }, []);
 
   /* ---- Core: load track on the correct engine ---- */
@@ -430,31 +503,56 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         return;
       }
 
+      // Check if the stream URL is already cached (pre-resolved by server
+      // or pre-fetched in the background). A cached *string* means we can
+      // set the src synchronously — best for iOS because there's no async
+      // gap between the user gesture and audio.play().
+      const cached = streamCacheRef.current.get(track.id);
+
+      if (typeof cached === "string") {
+        /* ---- Fast path: URL available synchronously ---- */
+        audio.src = cached;
+        audio.volume = volumeRef.current / 100;
+        isResolvingRef.current = false;
+
+        try {
+          await audio.play();
+          return;
+        } catch (err) {
+          // Cached URL may be stale — clear and try fresh
+          streamCacheRef.current.delete(track.id);
+          console.warn("Cached URL failed, retrying fresh:", err);
+          isResolvingRef.current = true;
+        }
+      }
+
       // iOS Safari fix: "activate" the Audio element in the user gesture
       // context BEFORE the async stream-resolution fetch. We play a tiny
       // silence clip synchronously in the gesture call-stack; this tells
       // iOS that a user interaction intends to produce audio, so the
       // subsequent programmatic play() after the fetch is permitted.
-      audio.src = SILENCE_DATA_URI;
-      audio.play().catch(() => {});
+      if (typeof cached !== "string") {
+        audio.src = SILENCE_DATA_URI;
+        audio.play().catch(() => {});
+      }
 
       try {
-        const res = await fetch(
-          `/api/stream?id=${encodeURIComponent(track.id)}`
-        );
-        if (!res.ok) {
-          const data = await res.json().catch(() => ({}));
-          throw new Error(
-            (data as { error?: string }).error ||
-              `Stream resolution HTTP ${res.status}`
-          );
+        let streamUrl: string;
+
+        // If a preload promise is in flight, await it (no duplicate fetch)
+        if (cached && typeof cached !== "string") {
+          try {
+            streamUrl = await cached;
+          } catch {
+            streamCacheRef.current.delete(track.id);
+            streamUrl = await freshStreamFetch(track.id);
+          }
+        } else {
+          streamUrl = await freshStreamFetch(track.id);
         }
-        const data = await res.json();
-        if (!data.url) throw new Error("Empty stream URL");
 
-        audio.src = data.url;
+        audio.src = streamUrl;
         audio.volume = volumeRef.current / 100;
-
         isResolvingRef.current = false;
 
         await audio.play();
@@ -465,7 +563,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         throw err; // let caller handle
       }
     }
-  }, []);
+  }, [freshStreamFetch]);
 
   /* ---- playIndex (user gesture → load + play) ---- */
   const playIndex = useCallback(
@@ -682,6 +780,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         setError,
         setIsLoading,
         currentTrack,
+        cacheStreamUrls,
+        preloadStreams,
         onYTReady,
         onYTStateChange,
         onYTError,

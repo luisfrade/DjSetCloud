@@ -16,6 +16,8 @@ export interface Track {
 export interface TracksResponse {
   tracks: Track[];
   nextOffset: number | null;
+  /** Pre-resolved stream URLs for the first few audio tracks (keyed by track id). */
+  preloadedStreams?: Record<string, string>;
 }
 
 export interface PlayerState {
