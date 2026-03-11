@@ -21,6 +21,7 @@ async function resolveClientId(): Promise<string> {
   }
 
   const res = await fetch("https://soundcloud.com", {
+    cache: "no-store",
     headers: {
       "User-Agent":
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
@@ -35,7 +36,7 @@ async function resolveClientId(): Promise<string> {
 
   for (const url of scriptUrls.slice(-5)) {
     try {
-      const scriptRes = await fetch(url);
+      const scriptRes = await fetch(url, { cache: "no-store" });
       const js = await scriptRes.text();
       const match = js.match(/client_id:"([a-zA-Z0-9]{32})"/);
       if (match) {
@@ -87,6 +88,7 @@ interface SearchParams {
   genre: string;
   minDurationMs: number;
   limit: number;
+  skipDateFilter?: boolean;
 }
 
 async function searchTracksForGenre(
@@ -97,12 +99,16 @@ async function searchTracksForGenre(
   url.searchParams.set("q", params.query);
   url.searchParams.set("filter.genre_or_tag", params.genre);
   url.searchParams.set("filter.duration", "epic");
+  if (!params.skipDateFilter) {
+    url.searchParams.set("filter.created_at", "last_month");
+  }
   url.searchParams.set("limit", String(params.limit));
   url.searchParams.set("access", "playable");
   url.searchParams.set("linked_partitioning", "true");
   url.searchParams.set("client_id", clientId);
 
   const res = await fetch(url.toString(), {
+    cache: "no-store",
     signal: AbortSignal.timeout(10000),
   });
 
@@ -157,68 +163,97 @@ const GENRES = ["afro house", "house", "techno", "tech house"];
 const MIN_DURATION_MS = 40 * 60 * 1000; // 40 minutes
 
 /**
+ * Fetch tracks for a single genre with auth retry logic.
+ */
+async function fetchGenreWithRetry(
+  params: SearchParams,
+  clientId: string
+): Promise<{ tracks: Track[]; clientId: string }> {
+  try {
+    const tracks = await searchTracksForGenre(params, clientId);
+    return { tracks, clientId };
+  } catch (err) {
+    if (
+      err instanceof Error &&
+      err.message.includes("auth error") &&
+      !process.env.SOUNDCLOUD_CLIENT_ID
+    ) {
+      clearClientIdCache();
+      const newClientId = await resolveClientId();
+      try {
+        const tracks = await searchTracksForGenre(params, newClientId);
+        return { tracks, clientId: newClientId };
+      } catch {
+        console.error(`Failed to fetch genre "${params.genre}" after retry`);
+        return { tracks: [], clientId: newClientId };
+      }
+    }
+    console.error(`Failed to fetch genre "${params.genre}":`, err);
+    return { tracks: [], clientId };
+  }
+}
+
+/**
  * Fetch all SoundCloud DJ-set tracks across genres.
+ * First fetches recent tracks (last month), then backfills with older
+ * content if needed to ensure the feed always has enough tracks.
  * Returns a de-duplicated, date-sorted array.
  */
 export async function fetchSoundCloudTracks(): Promise<Track[]> {
   let clientId = await resolveClientId();
   const results: Track[] = [];
+  const seenIds = new Set<string>();
 
+  // 1. Fetch recent tracks (created in the last month) — prioritize fresh content
   for (const genre of GENRES) {
-    try {
-      const tracks = await searchTracksForGenre(
+    const { tracks, clientId: updatedId } = await fetchGenreWithRetry(
+      {
+        query: genre + " dj set",
+        genre,
+        minDurationMs: MIN_DURATION_MS,
+        limit: 50,
+      },
+      clientId
+    );
+    clientId = updatedId;
+    for (const t of tracks) {
+      if (!seenIds.has(t.id)) {
+        seenIds.add(t.id);
+        results.push(t);
+      }
+    }
+  }
+
+  // 2. If we got fewer than 20 recent tracks, backfill without date filter
+  if (results.length < 20) {
+    for (const genre of GENRES) {
+      const { tracks, clientId: updatedId } = await fetchGenreWithRetry(
         {
           query: genre + " dj set",
           genre,
           minDurationMs: MIN_DURATION_MS,
           limit: 50,
+          skipDateFilter: true,
         },
         clientId
       );
-      results.push(...tracks);
-    } catch (err) {
-      if (
-        err instanceof Error &&
-        err.message.includes("auth error") &&
-        !process.env.SOUNDCLOUD_CLIENT_ID
-      ) {
-        clearClientIdCache();
-        clientId = await resolveClientId();
-        try {
-          const tracks = await searchTracksForGenre(
-            {
-              query: genre + " dj set",
-              genre,
-              minDurationMs: MIN_DURATION_MS,
-              limit: 50,
-            },
-            clientId
-          );
-          results.push(...tracks);
-        } catch {
-          console.error(`Failed to fetch genre "${genre}" after retry`);
+      clientId = updatedId;
+      for (const t of tracks) {
+        if (!seenIds.has(t.id)) {
+          seenIds.add(t.id);
+          results.push(t);
         }
-      } else {
-        console.error(`Failed to fetch genre "${genre}":`, err);
       }
     }
   }
 
-  // Deduplicate by track ID
-  const seen = new Set<string>();
-  const unique = results.filter((t) => {
-    if (seen.has(t.id)) return false;
-    seen.add(t.id);
-    return true;
-  });
-
   // Sort by created_at descending (newest first)
-  unique.sort(
+  results.sort(
     (a, b) =>
       new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
   );
 
-  return unique;
+  return results;
 }
 
 /**
@@ -237,7 +272,7 @@ export async function resolveSoundCloudStreamUrl(
     // Cache miss — fetch the track by ID to get transcodings
     const res = await fetch(
       `https://api-v2.soundcloud.com/tracks/${numericId}?client_id=${clientId}`,
-      { signal: AbortSignal.timeout(10000) }
+      { cache: "no-store", signal: AbortSignal.timeout(10000) }
     );
     if (!res.ok) throw new Error(`Failed to fetch track ${numericId}`);
     const track: SCApiTrack = await res.json();
@@ -260,7 +295,7 @@ export async function resolveSoundCloudStreamUrl(
 
   // Resolve the actual stream URL from the transcoding endpoint
   const resolveUrl = `${streamData.mediaUrl}?client_id=${clientId}&track_authorization=${streamData.trackAuth}`;
-  const res = await fetch(resolveUrl, { signal: AbortSignal.timeout(10000) });
+  const res = await fetch(resolveUrl, { cache: "no-store", signal: AbortSignal.timeout(10000) });
 
   if (!res.ok) {
     // Cache might be stale — clear and throw so caller can retry

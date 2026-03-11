@@ -8,7 +8,8 @@ import Player from "@/components/Player";
 import ClockOverlay from "@/components/ClockOverlay";
 import YouTubePlayer from "@/components/YouTubePlayer";
 
-const REFRESH_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
+const REFRESH_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
+const MIN_VISIBILITY_REFRESH_MS = 5 * 60 * 1000; // 5 min minimum between refreshes
 
 export default function Home() {
   const {
@@ -24,6 +25,7 @@ export default function Home() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [showClock, setShowClock] = useState(false);
   const initialFetchDone = useRef(false);
+  const lastRefreshRef = useRef(Date.now());
 
   // Fetch initial tracks
   useEffect(() => {
@@ -58,6 +60,7 @@ export default function Home() {
   const handleRefresh = useCallback(() => {
     if (isRefreshing) return;
     setIsRefreshing(true);
+    lastRefreshRef.current = Date.now();
     fetch("/api/tracks")
       .then((res) => {
         if (!res.ok) throw new Error("Failed to refresh");
@@ -75,12 +78,27 @@ export default function Home() {
       });
   }, [isRefreshing, refreshTracks]);
 
-  // Auto-refresh feed every hour
+  // Auto-refresh feed every 30 minutes
   useEffect(() => {
     const interval = setInterval(() => {
       handleRefresh();
     }, REFRESH_INTERVAL_MS);
     return () => clearInterval(interval);
+  }, [handleRefresh]);
+
+  // Refresh when user returns to the tab (if enough time has passed)
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      if (
+        document.visibilityState === "visible" &&
+        Date.now() - lastRefreshRef.current > MIN_VISIBILITY_REFRESH_MS
+      ) {
+        handleRefresh();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () =>
+      document.removeEventListener("visibilitychange", onVisibilityChange);
   }, [handleRefresh]);
 
   const handleLoadMore = useCallback(() => {

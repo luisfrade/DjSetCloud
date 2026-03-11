@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { resolveSoundCloudStreamUrl } from "@/lib/soundcloud";
 import { resolveLivesetsStreamUrl } from "@/lib/livesets";
 
+// Stream URLs are time-limited; never cache
+export const dynamic = "force-dynamic";
+
 /**
  * Resolve a direct stream URL for a SoundCloud or Livesets track.
  * YouTube tracks use the IFrame Player API (client-side) and don't need this endpoint.
@@ -44,7 +47,12 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    return NextResponse.json({ url });
+    const response = NextResponse.json({ url });
+    response.headers.set(
+      "Cache-Control",
+      "no-store, no-cache, must-revalidate, max-age=0"
+    );
+    return response;
   } catch (err) {
     console.error("Stream resolution failed for", id, ":", err);
     const message =

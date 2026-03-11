@@ -25,8 +25,8 @@ export async function fetchLivesetsTracks(): Promise<Track[]> {
   const results: Track[] = [];
   const seenIds = new Set<string>();
 
-  // Fetch the first two pages of newest sessions
-  for (const page of [1, 2]) {
+  // Fetch the first 4 pages of newest sessions for more content
+  for (const page of [1, 2, 3, 4]) {
     try {
       const url =
         page === 1
@@ -34,6 +34,7 @@ export async function fetchLivesetsTracks(): Promise<Track[]> {
           : `${BASE}/session/all/new?ms=${page}`;
 
       const res = await fetch(url, {
+        cache: "no-store",
         signal: AbortSignal.timeout(15000),
         headers: {
           Accept: "text/html",
@@ -288,6 +289,7 @@ export async function resolveLivesetsStreamUrl(
   sessionId: string
 ): Promise<string> {
   const res = await fetch(`${BASE}/json/session/meta/${sessionId}`, {
+    cache: "no-store",
     signal: AbortSignal.timeout(10000),
     headers: { Accept: "application/json" },
   });

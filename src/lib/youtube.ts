@@ -35,6 +35,7 @@ async function pipedFetch<T>(path: string): Promise<T> {
   for (const instance of PIPED_INSTANCES) {
     try {
       const res = await fetch(`${instance}${path}`, {
+        cache: "no-store",
         signal: AbortSignal.timeout(15000),
         headers: { Accept: "application/json" },
       });
@@ -51,7 +52,7 @@ async function pipedFetch<T>(path: string): Promise<T> {
   throw lastError ?? new Error("All Piped instances failed");
 }
 
-const QUERIES = [
+const BASE_QUERIES = [
   "afro house dj set",
   "house music dj set",
   "techno dj set",
@@ -61,14 +62,36 @@ const QUERIES = [
 const MIN_DURATION_SEC = 40 * 60; // 40 minutes
 
 /**
+ * Build search queries that bias towards recent content.
+ * Uses the current year and "new"/"latest" keywords.
+ */
+function buildQueries(): string[] {
+  const year = new Date().getFullYear();
+  const queries: string[] = [];
+
+  // Add year-tagged queries for recency
+  for (const q of BASE_QUERIES) {
+    queries.push(`${q} ${year}`);
+  }
+
+  // Add base queries as fallback (broader results)
+  for (const q of BASE_QUERIES) {
+    queries.push(q);
+  }
+
+  return queries;
+}
+
+/**
  * Fetch DJ sets from YouTube via Piped API (search only).
  * Playback uses the YouTube IFrame Player API (client-side).
  */
 export async function fetchYouTubeTracks(): Promise<Track[]> {
   const results: Track[] = [];
   const seenIds = new Set<string>();
+  const queries = buildQueries();
 
-  for (const query of QUERIES) {
+  for (const query of queries) {
     try {
       const data = await pipedFetch<PipedSearchResponse>(
         `/search?q=${encodeURIComponent(query)}&filter=videos`

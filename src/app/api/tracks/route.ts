@@ -4,6 +4,9 @@ import { fetchYouTubeTracks } from "@/lib/youtube";
 import { fetchLivesetsTracks } from "@/lib/livesets";
 import { Track } from "@/types";
 
+// Ensure this route is always dynamic (never cached by Vercel)
+export const dynamic = "force-dynamic";
+
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const offset = parseInt(searchParams.get("offset") || "0", 10);
@@ -66,7 +69,13 @@ export async function GET(request: NextRequest) {
     const nextOffset =
       offset + limit < unique.length ? offset + limit : null;
 
-    return NextResponse.json({ tracks: paginated, nextOffset });
+    const response = NextResponse.json({ tracks: paginated, nextOffset });
+    // Prevent any caching — always return fresh data
+    response.headers.set(
+      "Cache-Control",
+      "no-store, no-cache, must-revalidate, max-age=0"
+    );
+    return response;
   } catch (err) {
     console.error("Failed to fetch tracks:", err);
     const message =
