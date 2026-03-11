@@ -209,6 +209,14 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
    */
   const streamCacheRef = useRef(new Map<string, string | Promise<string>>());
 
+  /**
+   * Pool of hidden Audio elements that pre-buffer audio data for the
+   * tracks most likely to be played next.  When loadAndPlay later sets
+   * the same URL on the main audio element, the browser's HTTP cache
+   * provides the data near-instantly.
+   */
+  const preloadPoolRef = useRef<HTMLAudioElement[]>([]);
+
   // Keep refs in sync
   tracksRef.current = state.tracks;
   stateRef.current = state;
@@ -302,6 +310,26 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       audio.src = "";
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /* ---- Pre-buffer audio pool (hidden elements for adjacent tracks) ---- */
+  useEffect(() => {
+    const pool: HTMLAudioElement[] = [];
+    for (let i = 0; i < 3; i++) {
+      const a = new Audio();
+      a.preload = "auto";
+      a.volume = 0; // silent — only used for pre-buffering
+      pool.push(a);
+    }
+    preloadPoolRef.current = pool;
+
+    return () => {
+      for (const a of pool) {
+        a.pause();
+        a.removeAttribute("src");
+        a.load();
+      }
+    };
   }, []);
 
   /* ---- Load shuffle preference from localStorage ---- */
@@ -683,6 +711,105 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   /* ---- Stable ref for next(), used inside audio "ended" handler ---- */
   const nextRef = useRef(next);
   nextRef.current = next;
+
+  /* ---------------------------------------------------------------- */
+  /*  Rolling pre-buffer: keep adjacent tracks warm                    */
+  /*                                                                   */
+  /*  When the current track changes we determine which tracks are     */
+  /*  most likely to be played next, resolve their stream URLs, and    */
+  /*  start downloading their audio data on hidden Audio elements.     */
+  /*  When loadAndPlay later sets the same URL on the main audio, the  */
+  /*  browser's HTTP cache provides the data near-instantly.            */
+  /* ---------------------------------------------------------------- */
+
+  useEffect(() => {
+    const { currentIndex, tracks, shuffle, playHistory } = stateRef.current;
+    if (currentIndex < 0 || tracks.length === 0) return;
+
+    // ---- Pick targets based on play mode ----
+    const targetTracks: Track[] = [];
+    const seen = new Set<string>();
+
+    const add = (t: Track | undefined) => {
+      if (t && t.source !== "youtube" && !seen.has(t.id)) {
+        seen.add(t.id);
+        targetTracks.push(t);
+      }
+    };
+
+    if (shuffle) {
+      // Shuffle: prev-history (for ◀ button) + adjacent in feed (likely visible)
+      if (playHistory.length > 0) {
+        add(tracks[playHistory[playHistory.length - 1]]);
+      }
+      add(tracks[currentIndex + 1]);
+      add(tracks[currentIndex - 1]);
+      add(tracks[currentIndex + 2]);
+      add(tracks[currentIndex - 2]);
+    } else {
+      // Sequential: next tracks (auto-advance order) + prev
+      add(tracks[currentIndex + 1]);
+      add(tracks[currentIndex + 2]);
+      add(tracks[currentIndex + 3]);
+      add(tracks[currentIndex - 1]);
+    }
+
+    const pool = preloadPoolRef.current;
+    const targets = targetTracks.slice(0, pool.length);
+    if (targets.length === 0) return;
+
+    // ---- Resolve URLs & assign to pool elements ----
+    let cancelled = false;
+
+    targets.forEach(async (track, i) => {
+      if (i >= pool.length || cancelled) return;
+      const el = pool[i];
+
+      // Skip if this slot is already buffering the same track
+      if (el.getAttribute("data-track-id") === track.id) return;
+
+      // Resolve the stream URL (cache → pending promise → fresh fetch)
+      let url: string | null = null;
+      const cached = streamCacheRef.current.get(track.id);
+
+      if (typeof cached === "string") {
+        url = cached;
+      } else if (cached) {
+        try {
+          url = await cached;
+        } catch {
+          /* ignore */
+        }
+      } else {
+        // Fire a fresh fetch and cache it
+        try {
+          const res = await fetch(
+            `/api/stream?id=${encodeURIComponent(track.id)}`
+          );
+          if (res.ok) {
+            const data = await res.json();
+            if (data.url) {
+              url = data.url as string;
+              streamCacheRef.current.set(track.id, url as string);
+            }
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+
+      if (!url || cancelled) return;
+
+      // Assign to pool element — browser starts downloading audio data
+      el.setAttribute("data-track-id", track.id);
+      el.src = url;
+      el.load();
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [state.currentIndex]);
 
   /* ---------------------------------------------------------------- */
   /*  YouTube IFrame Player callbacks                                  */
