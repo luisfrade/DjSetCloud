@@ -63,7 +63,7 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Deduplicate by ID (across sources there shouldn't be dupes, but safety)
+    // Deduplicate by ID (followings first so they win over generic search results)
     const seen = new Set<string>();
     const unique = allTracks.filter((t) => {
       if (seen.has(t.id)) return false;
