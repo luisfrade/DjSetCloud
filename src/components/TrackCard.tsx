@@ -78,7 +78,7 @@ export default function TrackCard({ track, index }: TrackCardProps) {
           isActive
             ? "bg-white/10 border-l-4 border-blue-500"
             : isFollowing
-              ? "bg-purple-500/5 hover:bg-purple-500/10 border-l-4 border-purple-500/40"
+              ? "bg-blue-500/5 hover:bg-blue-500/10 border-l-4 border-blue-500/40"
               : "hover:bg-white/5 border-l-4 border-transparent"
         }`}
     >
@@ -139,7 +139,7 @@ export default function TrackCard({ track, index }: TrackCardProps) {
               : isLivesets
                 ? "text-white/20 hover:text-green-400"
                 : isFollowing
-                  ? "text-purple-400/60 hover:text-purple-400"
+                  ? "text-blue-400/60 hover:text-blue-400"
                   : "text-white/20 hover:text-orange-400"
           }`}
           title={
