@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, useCallback } from "react";
+import { useRef, useState, useCallback, useEffect } from "react";
 import { usePlayer } from "@/context/PlayerContext";
 import TrackCard from "./TrackCard";
 
@@ -23,9 +23,29 @@ export default function Feed({
 }: FeedProps) {
   const { state } = usePlayer();
   const scrollRef = useRef<HTMLDivElement>(null);
+  const sentinelRef = useRef<HTMLDivElement>(null);
   const touchStartY = useRef<number | null>(null);
   const [pullDistance, setPullDistance] = useState(0);
   const [pulling, setPulling] = useState(false);
+
+  // ——— Infinite scroll via IntersectionObserver ———
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    const container = scrollRef.current;
+    if (!sentinel || !container) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting && hasMore && !isLoadingMore) {
+          onLoadMore();
+        }
+      },
+      { root: container, rootMargin: "400px" }
+    );
+
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [hasMore, isLoadingMore, onLoadMore]);
 
   // ——— Pull-to-refresh touch handlers ———
   const onTouchStart = useCallback(
@@ -148,15 +168,12 @@ export default function Feed({
           <TrackCard key={track.id} track={track} index={index} />
         ))}
 
-        {hasMore && (
-          <div className="flex justify-center pt-4 pb-8">
-            <button
-              onClick={onLoadMore}
-              disabled={isLoadingMore}
-              className="px-6 py-2 bg-white/10 hover:bg-white/20 disabled:opacity-50 rounded-lg text-sm transition-colors"
-            >
-              {isLoadingMore ? "Loading..." : "Load More"}
-            </button>
+        {/* Infinite scroll sentinel */}
+        <div ref={sentinelRef} className="h-1" />
+
+        {isLoadingMore && (
+          <div className="flex justify-center py-6">
+            <div className="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
           </div>
         )}
       </div>
