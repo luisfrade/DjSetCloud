@@ -37,6 +37,16 @@ function LivesetsIcon({ className }: { className?: string }) {
   );
 }
 
+/* Following icon (person with star) */
+function FollowingIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="currentColor">
+      <path d="M9 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0-6c1.1 0 2 .9 2 2s-.9 2-2 2-2-.9-2-2 .9-2 2-2zm0 8c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4zm-6 4c.22-.72 3.31-2 6-2 2.7 0 5.8 1.29 6 2H3z" />
+      <path d="M19.5 9.5l-1.06 2.15L16.3 12.7l2.14 1.06L19.5 15.9l1.06-2.14L22.7 12.7l-2.14-1.05z" />
+    </svg>
+  );
+}
+
 export default function TrackCard({ track, index }: TrackCardProps) {
   const { state, playIndex, play } = usePlayer();
   const isActive = state.currentIndex === index;
@@ -51,9 +61,11 @@ export default function TrackCard({ track, index }: TrackCardProps) {
 
   const isYouTube = track.source === "youtube";
   const isLivesets = track.source === "livesets";
+  const isFollowing = track.source === "sc-following";
+  const isSoundCloud = track.source === "soundcloud" || isFollowing;
 
   const artworkUrl = track.artwork_url
-    ? track.source === "soundcloud"
+    ? isSoundCloud
       ? track.artwork_url.replace("-large", "-t200x200")
       : track.artwork_url
     : null;
@@ -124,15 +136,35 @@ export default function TrackCard({ track, index }: TrackCardProps) {
               ? "text-white/20 hover:text-red-400"
               : isLivesets
                 ? "text-white/20 hover:text-green-400"
-                : "text-white/20 hover:text-orange-400"
+                : isFollowing
+                  ? "text-purple-400/60 hover:text-purple-400"
+                  : "text-white/20 hover:text-orange-400"
           }`}
-          title={isYouTube ? "Open on YouTube" : isLivesets ? "Open on Livesets" : "Open on SoundCloud"}
-          aria-label={isYouTube ? "Open on YouTube" : isLivesets ? "Open on Livesets" : "Open on SoundCloud"}
+          title={
+            isYouTube
+              ? "Open on YouTube"
+              : isLivesets
+                ? "Open on Livesets"
+                : isFollowing
+                  ? "From followed artist"
+                  : "Open on SoundCloud"
+          }
+          aria-label={
+            isYouTube
+              ? "Open on YouTube"
+              : isLivesets
+                ? "Open on Livesets"
+                : isFollowing
+                  ? "From followed artist"
+                  : "Open on SoundCloud"
+          }
         >
           {isYouTube ? (
             <YouTubeIcon className="w-4 h-4" />
           ) : isLivesets ? (
             <LivesetsIcon className="w-4 h-4" />
+          ) : isFollowing ? (
+            <FollowingIcon className="w-4 h-4" />
           ) : (
             <SoundCloudIcon className="w-4 h-4" />
           )}

@@ -256,6 +256,141 @@ export async function fetchSoundCloudTracks(): Promise<Track[]> {
   return results;
 }
 
+/* ------------------------------------------------------------------ */
+/*  SoundCloud Followings Feed                                         */
+/* ------------------------------------------------------------------ */
+
+const SC_PROFILE_URL = "https://soundcloud.com/luisfrade";
+
+/**
+ * Helper: does this SoundCloud track qualify as a DJ set in our genres?
+ */
+function isDjSet(t: SCApiTrack): boolean {
+  if (t.duration < MIN_DURATION_MS) return false;
+  const haystack = `${(t.genre || "").toLowerCase()} ${(t.title || "").toLowerCase()}`;
+  return GENRES.some((g) => haystack.includes(g));
+}
+
+/**
+ * Convert a raw SC API track into our Track model (sc-following source).
+ * Also populates the stream cache.
+ */
+function toFollowingTrack(t: SCApiTrack): Track {
+  const progressive = t.media?.transcodings?.find(
+    (tc) => tc.format.protocol === "progressive"
+  );
+  const hls = t.media?.transcodings?.find(
+    (tc) => tc.format.protocol === "hls"
+  );
+  const mediaUrl = progressive?.url || hls?.url;
+  if (mediaUrl && t.track_authorization) {
+    trackStreamCache.set(t.id, { mediaUrl, trackAuth: t.track_authorization });
+  }
+
+  return {
+    id: `sc-${t.id}`,
+    source: "sc-following" as const,
+    title: t.title,
+    permalink_url: t.permalink_url,
+    artwork_url: t.artwork_url,
+    duration: t.duration,
+    created_at: t.created_at,
+    genre: t.genre,
+    user: {
+      username: t.user.username,
+      avatar_url: t.user.avatar_url,
+    },
+  };
+}
+
+/**
+ * Fetch DJ-set tracks from artists the user follows on SoundCloud.
+ * Resolves the user profile, fetches the followings list, then
+ * retrieves recent tracks for each followed artist and filters
+ * by the same duration / genre rules used elsewhere.
+ */
+export async function fetchSoundCloudFollowingsTracks(): Promise<Track[]> {
+  const clientId = await resolveClientId();
+
+  // 1. Resolve user ID from profile URL
+  const resolveRes = await fetch(
+    `https://api-v2.soundcloud.com/resolve?url=${encodeURIComponent(SC_PROFILE_URL)}&client_id=${clientId}`,
+    { cache: "no-store", signal: AbortSignal.timeout(10000) }
+  );
+  if (!resolveRes.ok) {
+    console.error("Failed to resolve SC user profile:", resolveRes.status);
+    return [];
+  }
+  const userData = await resolveRes.json();
+  const userId: number = userData.id;
+
+  // 2. Fetch followings (up to 200 artists)
+  interface SCFollowing { id: number; username: string }
+  const followings: SCFollowing[] = [];
+  let nextHref: string | null =
+    `https://api-v2.soundcloud.com/users/${userId}/followings?client_id=${clientId}&limit=200`;
+
+  while (nextHref && followings.length < 200) {
+    try {
+      const url: string = nextHref;
+      const res = await fetch(url, {
+        cache: "no-store",
+        signal: AbortSignal.timeout(10000),
+      });
+      if (!res.ok) break;
+      const data = await res.json();
+      followings.push(...(data.collection || []));
+      nextHref = data.next_href
+        ? `${data.next_href}&client_id=${clientId}`
+        : null;
+    } catch {
+      break;
+    }
+  }
+
+  console.log(`SC followings: ${followings.length} artists found`);
+
+  // 3. Fetch recent tracks from each followed artist (batches of 15)
+  const BATCH_SIZE = 15;
+  const results: Track[] = [];
+  const seenIds = new Set<string>();
+
+  for (let i = 0; i < followings.length; i += BATCH_SIZE) {
+    const batch = followings.slice(i, i + BATCH_SIZE);
+    const batchResults = await Promise.allSettled(
+      batch.map(async (user) => {
+        const res = await fetch(
+          `https://api-v2.soundcloud.com/users/${user.id}/tracks?client_id=${clientId}&limit=20&linked_partitioning=true`,
+          { cache: "no-store", signal: AbortSignal.timeout(8000) }
+        );
+        if (!res.ok) return [];
+        const data = await res.json();
+        return (data.collection || []) as SCApiTrack[];
+      })
+    );
+
+    for (const result of batchResults) {
+      if (result.status !== "fulfilled") continue;
+      for (const t of result.value) {
+        if (!isDjSet(t)) continue;
+        const id = `sc-${t.id}`;
+        if (seenIds.has(id)) continue;
+        seenIds.add(id);
+        results.push(toFollowingTrack(t));
+      }
+    }
+  }
+
+  console.log(`SC followings: ${results.length} qualifying DJ sets`);
+
+  results.sort(
+    (a, b) =>
+      new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+  );
+
+  return results;
+}
+
 /**
  * Resolve a direct streaming URL for a SoundCloud track by its numeric ID.
  * First checks the in-memory cache (populated during search), then falls back

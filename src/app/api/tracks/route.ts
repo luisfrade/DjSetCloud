@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { fetchSoundCloudTracks, resolveSoundCloudStreamUrl } from "@/lib/soundcloud";
+import { fetchSoundCloudTracks, fetchSoundCloudFollowingsTracks, resolveSoundCloudStreamUrl } from "@/lib/soundcloud";
 import { fetchYouTubeTracks } from "@/lib/youtube";
 import { fetchLivesetsTracks, resolveLivesetsStreamUrl } from "@/lib/livesets";
 import { Track } from "@/types";
@@ -16,14 +16,27 @@ export async function GET(request: NextRequest) {
   );
 
   try {
-    // Fetch from all sources in parallel
-    const [scResult, ytResult, lsResult] = await Promise.allSettled([
+    // Fetch from all sources in parallel (followings included with a 20s timeout)
+    const followingsWithTimeout = Promise.race([
+      fetchSoundCloudFollowingsTracks(),
+      new Promise<Track[]>((resolve) => setTimeout(() => resolve([]), 20000)),
+    ]);
+
+    const [scResult, ytResult, lsResult, followResult] = await Promise.allSettled([
       fetchSoundCloudTracks(),
       fetchYouTubeTracks(),
       fetchLivesetsTracks(),
+      followingsWithTimeout,
     ]);
 
     const allTracks: Track[] = [];
+
+    // Followings first so they win dedup over generic search results
+    if (followResult.status === "fulfilled") {
+      allTracks.push(...followResult.value);
+    } else {
+      console.error("SC followings fetch failed:", followResult.reason);
+    }
 
     if (scResult.status === "fulfilled") {
       allTracks.push(...scResult.value);
@@ -79,7 +92,7 @@ export async function GET(request: NextRequest) {
 
       const results = await Promise.allSettled(
         toPreload.map(async (track) => {
-          if (track.source === "soundcloud") {
+          if (track.source === "soundcloud" || track.source === "sc-following") {
             const numericId = parseInt(track.id.slice(3), 10);
             const url = await resolveSoundCloudStreamUrl(numericId);
             return { id: track.id, url };

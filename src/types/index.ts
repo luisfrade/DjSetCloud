@@ -1,6 +1,6 @@
 export interface Track {
   id: string; // "sc-{numericId}" or "yt-{videoId}"
-  source: "soundcloud" | "youtube" | "livesets";
+  source: "soundcloud" | "youtube" | "livesets" | "sc-following";
   title: string;
   permalink_url: string;
   artwork_url: string | null;

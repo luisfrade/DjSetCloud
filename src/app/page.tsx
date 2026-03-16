@@ -13,15 +13,14 @@ const MIN_VISIBILITY_REFRESH_MS = 5 * 60 * 1000; // 5 min minimum between refres
 
 export default function Home() {
   const {
+    state: playerState,
     setTracks,
     appendTracks,
     refreshTracks,
-    playIndex,
     setError,
     setIsLoading,
     cacheStreamUrls,
     preloadStreams,
-    preBufferAudio,
   } = usePlayer();
   const [nextOffset, setNextOffset] = useState<number | null>(null);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -29,8 +28,11 @@ export default function Home() {
   const [showClock, setShowClock] = useState(false);
   const initialFetchDone = useRef(false);
   const lastRefreshRef = useRef(Date.now());
+  const inactivityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isPlayingRef = useRef(false);
+  isPlayingRef.current = playerState.isPlaying;
 
-  // Fetch initial tracks
+  // Fetch initial tracks (no autoplay — user picks the first track)
   useEffect(() => {
     if (initialFetchDone.current) return;
     initialFetchDone.current = true;
@@ -47,35 +49,45 @@ export default function Home() {
         setNextOffset(data.nextOffset);
 
         // Seed the stream URL cache with any URLs pre-resolved by the server.
-        // This eliminates the /api/stream round-trip for the first tracks.
         if (data.preloadedStreams) {
           cacheStreamUrls(data.preloadedStreams);
         }
 
+        // Pre-fetch stream URLs for more tracks in the background
+        // so the first user-initiated play is instant.
         if (data.tracks.length > 0) {
-          // Always auto-play the first track (newest in the feed).
-          const startTrack = data.tracks[0];
-
-          // Start pre-buffering the autoplay track's audio data on a hidden
-          // Audio element BEFORE calling playIndex.  When loadAndPlay later
-          // sets the same URL on the main Audio element, the browser HTTP
-          // cache serves the already-downloading data — drastically reducing
-          // time-to-first-play.
-          if (startTrack && data.preloadedStreams?.[startTrack.id]) {
-            preBufferAudio(startTrack.id, data.preloadedStreams[startTrack.id]);
-          }
-
-          playIndex(0);
-
-          // Pre-fetch stream URLs for more tracks in the background
-          // so subsequent plays are instant.
           preloadStreams(data.tracks);
         }
       })
       .catch((err) => {
         setError(err.message || "Failed to load tracks");
       });
-  }, [setTracks, playIndex, setError, setIsLoading, cacheStreamUrls, preloadStreams, preBufferAudio]);
+  }, [setTracks, setError, setIsLoading, cacheStreamUrls, preloadStreams]);
+
+  // 2-minute inactivity timer — show clock overlay when audio is playing
+  useEffect(() => {
+    const INACTIVITY_MS = 2 * 60 * 1000;
+
+    const resetTimer = () => {
+      if (inactivityTimerRef.current) clearTimeout(inactivityTimerRef.current);
+      inactivityTimerRef.current = setTimeout(() => {
+        if (isPlayingRef.current) {
+          setShowClock(true);
+        }
+      }, INACTIVITY_MS);
+    };
+
+    const events = ["mousemove", "touchstart", "click", "keydown", "scroll"];
+    events.forEach((e) =>
+      document.addEventListener(e, resetTimer, { passive: true })
+    );
+    resetTimer();
+
+    return () => {
+      events.forEach((e) => document.removeEventListener(e, resetTimer));
+      if (inactivityTimerRef.current) clearTimeout(inactivityTimerRef.current);
+    };
+  }, []);
 
   const handleRefresh = useCallback(() => {
     if (isRefreshing) return;
