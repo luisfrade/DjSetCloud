@@ -7,6 +7,7 @@ import Feed from "@/components/Feed";
 import Player from "@/components/Player";
 import ClockOverlay from "@/components/ClockOverlay";
 import YouTubePlayer from "@/components/YouTubePlayer";
+import SplashScreen from "@/components/SplashScreen";
 
 const REFRESH_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
 const MIN_VISIBILITY_REFRESH_MS = 5 * 60 * 1000; // 5 min minimum between refreshes
@@ -26,6 +27,7 @@ export default function Home() {
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [showClock, setShowClock] = useState(false);
+  const [showSplash, setShowSplash] = useState(true);
   const initialFetchDone = useRef(false);
   const lastRefreshRef = useRef(Date.now());
   const inactivityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -229,6 +231,14 @@ export default function Home() {
 
       {/* Clock overlay */}
       {showClock && <ClockOverlay onClose={() => setShowClock(false)} />}
+
+      {/* Splash / loading screen */}
+      {showSplash && (
+        <SplashScreen
+          isLoaded={!playerState.isLoading}
+          onComplete={() => setShowSplash(false)}
+        />
+      )}
     </div>
   );
 }

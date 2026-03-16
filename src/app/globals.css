@@ -68,6 +68,138 @@ body {
   }
 }
 
+/* --------------------------------------------------------- */
+/*  Splash screen animations                                  */
+/* --------------------------------------------------------- */
+
+/* Vinyl disc: scale up from nothing + aggressive spin (3 turns) */
+@keyframes splashDisc {
+  0% {
+    transform: scale(0) rotate(0deg);
+    opacity: 0;
+  }
+  15% {
+    opacity: 1;
+  }
+  60% {
+    transform: scale(1.15) rotate(1080deg);
+  }
+  80% {
+    transform: scale(0.95) rotate(1080deg);
+  }
+  100% {
+    transform: scale(1) rotate(1080deg);
+  }
+}
+
+/* Blue neon glow pulse behind the disc */
+@keyframes splashGlow {
+  0% {
+    transform: scale(0.5);
+    opacity: 0;
+  }
+  30% {
+    opacity: 0.8;
+  }
+  60% {
+    transform: scale(1.8);
+    opacity: 0.4;
+  }
+  100% {
+    transform: scale(2.2);
+    opacity: 0;
+  }
+}
+
+/* Glitch text: horizontal offset + flicker */
+@keyframes glitchText {
+  0% {
+    clip-path: inset(0 100% 0 0);
+    transform: translateX(-8px);
+    opacity: 0;
+  }
+  10% {
+    clip-path: inset(0 60% 0 0);
+    transform: translateX(6px);
+    opacity: 1;
+  }
+  20% {
+    clip-path: inset(0 30% 0 0);
+    transform: translateX(-4px);
+  }
+  30% {
+    clip-path: inset(0 10% 0 0);
+    transform: translateX(3px);
+  }
+  40% {
+    clip-path: inset(0 0% 0 0);
+    transform: translateX(-2px);
+    opacity: 0.7;
+  }
+  50% {
+    transform: translateX(0);
+    opacity: 1;
+  }
+  55% {
+    transform: translateX(5px) skewX(-2deg);
+    opacity: 0.6;
+  }
+  60% {
+    transform: translateX(-3px) skewX(1deg);
+    opacity: 1;
+  }
+  65% {
+    transform: translateX(0) skewX(0);
+  }
+  100% {
+    transform: translateX(0);
+    opacity: 1;
+    clip-path: inset(0 0% 0 0);
+  }
+}
+
+/* Subtitle slide up + fade */
+@keyframes splashSubtitle {
+  0% {
+    transform: translateY(10px);
+    opacity: 0;
+  }
+  100% {
+    transform: translateY(0);
+    opacity: 0.4;
+  }
+}
+
+/* Horizontal scan lines moving downward */
+@keyframes scanLines {
+  0% {
+    transform: translateY(-100%);
+  }
+  100% {
+    transform: translateY(100%);
+  }
+}
+
+/* Fade out the entire splash */
+@keyframes splashFadeOut {
+  0% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+/* Vinyl continuous spin after intro (while loading) */
+@keyframes splashIdleSpin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 /* Custom scrollbar */
 ::-webkit-scrollbar {
   width: 6px;
