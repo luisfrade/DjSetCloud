@@ -77,7 +77,9 @@ export default function TrackCard({ track, index }: TrackCardProps) {
         ${
           isActive
             ? "bg-white/10 border-l-4 border-blue-500"
-            : "hover:bg-white/5 border-l-4 border-transparent"
+            : isFollowing
+              ? "bg-purple-500/5 hover:bg-purple-500/10 border-l-4 border-purple-500/40"
+              : "hover:bg-white/5 border-l-4 border-transparent"
         }`}
     >
       {/* Artwork */}

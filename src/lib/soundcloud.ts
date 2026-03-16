@@ -351,12 +351,18 @@ export async function fetchSoundCloudFollowingsTracks(): Promise<Track[]> {
   console.log(`SC followings: ${followingIds.size} followed artist IDs`);
   if (followingIds.size === 0) return [];
 
-  // 3. Search for DJ sets with broader queries, keep only tracks from followed artists
-  const searchQueries = GENRES.flatMap((g) => [
-    `${g} dj set`,
-    `${g} mix`,
-    `${g} live`,
-  ]);
+  // 3. Search with genre-agnostic queries, keep only tracks from followed artists.
+  //    The duration filter ("epic" = 10min+) plus our own 40-min check does the filtering.
+  const searchQueries = [
+    "dj set",
+    "dj mix",
+    "live set",
+    "mix",
+    "podcast",
+    "radio show",
+    "b2b",
+    "session",
+  ];
 
   const results: Track[] = [];
   const seenIds = new Set<string>();
