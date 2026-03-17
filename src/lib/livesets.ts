@@ -13,6 +13,8 @@ const TARGET_GENRES = [
   "minimal",
   "electronica",
   "indie dance",
+  "lofi",
+  "lo-fi",
 ];
 
 const MIN_DURATION_SEC = 40 * 60; // 40 minutes
@@ -237,6 +239,9 @@ const KNOWN_GENRES = [
   "Trance",
   "UK Garage",
   "Uplifting Trance",
+  "Lofi",
+  "Lo-Fi",
+  "Lo-fi",
 ];
 
 function extractGenres(text: string): string[] {

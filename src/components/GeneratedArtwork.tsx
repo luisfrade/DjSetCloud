@@ -78,6 +78,11 @@ function getPalette(genre: string): Palette {
       colors: ["#bf360c", "#d84315", "#ff7043"],
       accent: "#ff8a65",
     };
+  if (g.includes("lofi") || g.includes("lo-fi"))
+    return {
+      colors: ["#4a4063", "#6b5b8a", "#a594c0"],
+      accent: "#c4b5d9",
+    };
   if (g.includes("house"))
     return {
       colors: ["#e65100", "#f57c00", "#ffb74d"],

@@ -57,6 +57,7 @@ const BASE_QUERIES = [
   "house music dj set",
   "techno dj set",
   "tech house dj set",
+  "lofi dj set",
 ];
 
 const MIN_DURATION_SEC = 40 * 60; // 40 minutes

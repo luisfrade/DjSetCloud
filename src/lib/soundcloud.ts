@@ -160,7 +160,7 @@ async function searchTracksForGenre(
     });
 }
 
-const GENRES = ["afro house", "house", "techno", "tech house"];
+const GENRES = ["afro house", "house", "techno", "tech house", "lofi"];
 const MIN_DURATION_MS = 40 * 60 * 1000; // 40 minutes
 
 /**

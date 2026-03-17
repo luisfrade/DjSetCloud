@@ -15,6 +15,7 @@ const GENRE_CHIPS = [
   { label: "House", value: "house" },
   { label: "Techno", value: "techno" },
   { label: "Tech House", value: "tech house" },
+  { label: "Lofi", value: "lofi" },
 ];
 
 export default function SearchFilter({
