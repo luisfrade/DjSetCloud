@@ -193,7 +193,9 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(playerReducer, initialState);
 
   /* ---- refs ---- */
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const audioARef = useRef<HTMLAudioElement | null>(null);
+  const audioBRef = useRef<HTMLAudioElement | null>(null);
+  const currentDeckRef = useRef<"A" | "B">("A");
   const ytPlayerRef = useRef<YTPlayer | null>(null);
   const activeEngineRef = useRef<"audio" | "youtube">("audio");
   const pendingYTLoadRef = useRef<string | null>(null);
@@ -203,6 +205,13 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const volumeRef = useRef(initialState.volume);
   const consecutiveErrorsRef = useRef(0);
   const isResolvingRef = useRef(false);
+
+  /* ---- Crossfade refs ---- */
+  const CROSSFADE_DURATION = 6; // seconds
+  const crossfadeActiveRef = useRef(false);
+  const crossfadeIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const crossfadeStartTimeRef = useRef(0);
+  const startCrossfadeRef = useRef<() => void>(() => {});
 
   /**
    * Client-side stream URL cache.
@@ -225,92 +234,163 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   stateRef.current = state;
   volumeRef.current = state.volume;
 
-  /* ---- Create Audio element (once) ---- */
+  /* ---- Dual-deck helpers ---- */
+  const getActiveAudio = () =>
+    currentDeckRef.current === "A" ? audioARef.current : audioBRef.current;
+  const getInactiveAudio = () =>
+    currentDeckRef.current === "A" ? audioBRef.current : audioARef.current;
+
+  const finalizeCrossfade = (outgoingAudio: HTMLAudioElement) => {
+    outgoingAudio.pause();
+    outgoingAudio.src = "";
+    if (crossfadeIntervalRef.current) {
+      clearInterval(crossfadeIntervalRef.current);
+      crossfadeIntervalRef.current = null;
+    }
+    const active = getActiveAudio();
+    if (active) active.volume = volumeRef.current / 100;
+    crossfadeActiveRef.current = false;
+  };
+
+  const abortCrossfade = () => {
+    if (!crossfadeActiveRef.current) return;
+    if (crossfadeIntervalRef.current) {
+      clearInterval(crossfadeIntervalRef.current);
+      crossfadeIntervalRef.current = null;
+    }
+    // Stop the outgoing deck (inactive after the flip)
+    const inactive = getInactiveAudio();
+    if (inactive) { inactive.pause(); inactive.src = ""; }
+    // Restore full volume on the active deck
+    const active = getActiveAudio();
+    if (active) active.volume = volumeRef.current / 100;
+    crossfadeActiveRef.current = false;
+  };
+
+  /* ---- Create dual Audio elements (once) ---- */
   /* NO crossOrigin, NO Web Audio API / createMediaElementSource.       */
   /* This fixes iOS Safari where AudioContext starts suspended and      */
   /* blocks all audio routed through it.                                */
+  /* Two elements alternate roles (ping-pong) for crossfade support.   */
   useEffect(() => {
-    const audio = new Audio();
-    audio.preload = "auto";
-    audioRef.current = audio;
-    audio.volume = volumeRef.current / 100;
+    const audioA = new Audio();
+    audioA.preload = "auto";
+    audioA.volume = volumeRef.current / 100;
+    audioARef.current = audioA;
 
-    /* ---- Audio event listeners ---- */
-    const onTimeUpdate = () => {
-      if (activeEngineRef.current !== "audio") return;
-      if (audio.duration > 0 && isFinite(audio.duration)) {
-        dispatch({
-          type: "SET_PROGRESS",
-          progress: audio.currentTime / audio.duration,
-        });
-      }
+    const audioB = new Audio();
+    audioB.preload = "auto";
+    audioB.volume = 0;
+    audioBRef.current = audioB;
+
+    /* ---- Wire event listeners on both decks ---- */
+    const wireEvents = (audio: HTMLAudioElement, deck: "A" | "B") => {
+      const isDeckActive = () => deck === currentDeckRef.current;
+
+      const onTimeUpdate = () => {
+        if (activeEngineRef.current !== "audio") return;
+        if (!isDeckActive()) return;
+
+        if (audio.duration > 0 && isFinite(audio.duration)) {
+          dispatch({
+            type: "SET_PROGRESS",
+            progress: audio.currentTime / audio.duration,
+          });
+
+          // Crossfade trigger: start fading when near the end
+          const timeRemaining = audio.duration - audio.currentTime;
+          if (
+            !crossfadeActiveRef.current &&
+            !isResolvingRef.current &&
+            timeRemaining <= CROSSFADE_DURATION &&
+            timeRemaining > 0.5 &&
+            audio.duration >= CROSSFADE_DURATION * 2
+          ) {
+            startCrossfadeRef.current();
+          }
+        }
+      };
+
+      const onDurationChange = () => {
+        if (activeEngineRef.current !== "audio") return;
+        if (!isDeckActive()) return;
+        if (audio.duration > 0 && isFinite(audio.duration)) {
+          dispatch({
+            type: "SET_DURATION",
+            duration: audio.duration * 1000,
+          });
+        }
+      };
+
+      const onPlay = () => {
+        if (activeEngineRef.current !== "audio") return;
+        if (!isDeckActive()) return;
+        consecutiveErrorsRef.current = 0;
+        dispatch({ type: "SET_PLAYING", isPlaying: true });
+      };
+
+      const onPause = () => {
+        if (activeEngineRef.current !== "audio") return;
+        if (!isDeckActive()) return;
+        if (!isResolvingRef.current && !crossfadeActiveRef.current) {
+          dispatch({ type: "SET_PLAYING", isPlaying: false });
+        }
+      };
+
+      const onEnded = () => {
+        if (activeEngineRef.current !== "audio") return;
+        if (!isDeckActive()) return;
+        if (isResolvingRef.current) return;
+        // During crossfade the outgoing deck's ended event is expected — ignore it
+        if (crossfadeActiveRef.current) return;
+        nextRef.current();
+      };
+
+      const onError = () => {
+        if (activeEngineRef.current !== "audio") return;
+        if (!audio.src || audio.src === "") return;
+        if (isResolvingRef.current) return;
+        if (!isDeckActive()) return;
+
+        console.error("Audio playback error:", audio.error?.message);
+        consecutiveErrorsRef.current += 1;
+        if (consecutiveErrorsRef.current <= 3) {
+          setTimeout(() => nextRef.current(), 800);
+        } else {
+          dispatch({ type: "SET_PLAYING", isPlaying: false });
+          dispatch({
+            type: "SET_ERROR",
+            error: "Playback error. Try another track.",
+          });
+        }
+      };
+
+      audio.addEventListener("timeupdate", onTimeUpdate);
+      audio.addEventListener("durationchange", onDurationChange);
+      audio.addEventListener("play", onPlay);
+      audio.addEventListener("pause", onPause);
+      audio.addEventListener("ended", onEnded);
+      audio.addEventListener("error", onError);
+
+      return () => {
+        audio.removeEventListener("timeupdate", onTimeUpdate);
+        audio.removeEventListener("durationchange", onDurationChange);
+        audio.removeEventListener("play", onPlay);
+        audio.removeEventListener("pause", onPause);
+        audio.removeEventListener("ended", onEnded);
+        audio.removeEventListener("error", onError);
+      };
     };
 
-    const onDurationChange = () => {
-      if (activeEngineRef.current !== "audio") return;
-      if (audio.duration > 0 && isFinite(audio.duration)) {
-        dispatch({
-          type: "SET_DURATION",
-          duration: audio.duration * 1000, // seconds → ms
-        });
-      }
-    };
-
-    const onPlay = () => {
-      if (activeEngineRef.current !== "audio") return;
-      consecutiveErrorsRef.current = 0;
-      dispatch({ type: "SET_PLAYING", isPlaying: true });
-    };
-
-    const onPause = () => {
-      if (activeEngineRef.current !== "audio") return;
-      // Ignore pause events while we're resolving a new stream
-      if (!isResolvingRef.current) {
-        dispatch({ type: "SET_PLAYING", isPlaying: false });
-      }
-    };
-
-    const onEnded = () => {
-      if (activeEngineRef.current !== "audio") return;
-      // Ignore ended events during warm-up / stream resolution
-      // (e.g. the tiny silence clip ending before the real track loads)
-      if (isResolvingRef.current) return;
-      nextRef.current();
-    };
-
-    const onError = () => {
-      if (activeEngineRef.current !== "audio") return;
-      if (!audio.src || audio.src === "") return; // ignore empty src errors
-      if (isResolvingRef.current) return; // ignore errors during warm-up
-      console.error("Audio playback error:", audio.error?.message);
-      consecutiveErrorsRef.current += 1;
-      if (consecutiveErrorsRef.current <= 3) {
-        setTimeout(() => nextRef.current(), 800);
-      } else {
-        dispatch({ type: "SET_PLAYING", isPlaying: false });
-        dispatch({
-          type: "SET_ERROR",
-          error: "Playback error. Try another track.",
-        });
-      }
-    };
-
-    audio.addEventListener("timeupdate", onTimeUpdate);
-    audio.addEventListener("durationchange", onDurationChange);
-    audio.addEventListener("play", onPlay);
-    audio.addEventListener("pause", onPause);
-    audio.addEventListener("ended", onEnded);
-    audio.addEventListener("error", onError);
+    const cleanupA = wireEvents(audioA, "A");
+    const cleanupB = wireEvents(audioB, "B");
 
     return () => {
-      audio.removeEventListener("timeupdate", onTimeUpdate);
-      audio.removeEventListener("durationchange", onDurationChange);
-      audio.removeEventListener("play", onPlay);
-      audio.removeEventListener("pause", onPause);
-      audio.removeEventListener("ended", onEnded);
-      audio.removeEventListener("error", onError);
-      audio.pause();
-      audio.src = "";
+      cleanupA();
+      cleanupB();
+      if (crossfadeIntervalRef.current) clearInterval(crossfadeIntervalRef.current);
+      audioA.pause(); audioA.src = "";
+      audioB.pause(); audioB.src = "";
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -387,9 +467,19 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   /* ---- Volume — update both engines ---- */
   const setVolume = useCallback((volume: number) => {
     dispatch({ type: "SET_VOLUME", volume });
-    // HTML5 Audio uses 0–1 range
-    if (audioRef.current) {
-      audioRef.current.volume = volume / 100;
+    const v = volume / 100;
+
+    if (crossfadeActiveRef.current) {
+      // During crossfade, apply weighted volume to both decks
+      const elapsed = (Date.now() - crossfadeStartTimeRef.current) / 1000;
+      const t = Math.min(elapsed / CROSSFADE_DURATION, 1);
+      const active = getActiveAudio();
+      const inactive = getInactiveAudio();
+      if (active) active.volume = v * Math.sin(t * Math.PI / 2);
+      if (inactive) inactive.volume = v * Math.cos(t * Math.PI / 2);
+    } else {
+      const audio = getActiveAudio();
+      if (audio) audio.volume = v;
     }
     // YT Player uses 0–100 range
     try {
@@ -397,6 +487,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     } catch {
       /* player not ready */
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   /* ---- Shuffle ---- */
@@ -471,6 +562,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 
   /* ---- Seek (fraction 0–1) — route to active engine ---- */
   const seekTo = useCallback((fraction: number) => {
+    abortCrossfade();
+
     if (activeEngineRef.current === "youtube") {
       const ytp = ytPlayerRef.current;
       if (ytp) {
@@ -482,11 +575,12 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         }
       }
     } else {
-      const audio = audioRef.current;
+      const audio = getActiveAudio();
       if (audio && audio.duration > 0 && isFinite(audio.duration)) {
         audio.currentTime = fraction * audio.duration;
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   /* ---- Helper: fetch a fresh stream URL from the API ---- */
@@ -508,16 +602,17 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 
   /* ---- Core: load track on the correct engine ---- */
   const loadAndPlay = useCallback(async (track: Track) => {
+    abortCrossfade();
     isResolvingRef.current = true;
 
     if (track.source === "youtube") {
       /* ---- YouTube: use IFrame Player ---- */
 
-      // Stop the HTML5 Audio engine
-      if (audioRef.current) {
-        audioRef.current.pause();
-        audioRef.current.src = "";
-      }
+      // Stop both HTML5 Audio decks
+      const deckA = audioARef.current;
+      const deckB = audioBRef.current;
+      if (deckA) { deckA.pause(); deckA.src = ""; }
+      if (deckB) { deckB.pause(); deckB.src = ""; }
       activeEngineRef.current = "youtube";
 
       const videoId = track.id.replace("yt-", "");
@@ -546,7 +641,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       }
       activeEngineRef.current = "audio";
 
-      const audio = audioRef.current;
+      const audio = getActiveAudio();
       if (!audio) {
         isResolvingRef.current = false;
         return;
@@ -624,6 +719,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         throw err; // let caller handle
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [freshStreamFetch]);
 
   /* ---- playIndex (user gesture → load + play) ---- */
@@ -665,15 +761,16 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         /* ignore */
       }
     } else {
-      const audio = audioRef.current;
+      const audio = getActiveAudio();
       if (!audio) {
         dispatch({ type: "SET_PLAYING", isPlaying: false });
         return;
       }
+      // During crossfade, resume both decks
+      if (crossfadeActiveRef.current) {
+        getInactiveAudio()?.play().catch(() => {});
+      }
       audio.play().catch(() => {
-        // On iOS, a play() may occasionally fail if the audio element
-        // lost its "activated" state (e.g. after long backgrounding).
-        // Retry once after a brief delay as the gesture may still be valid.
         setTimeout(() => {
           audio.play().catch(() => {
             dispatch({ type: "SET_PLAYING", isPlaying: false });
@@ -681,6 +778,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         }, 150);
       });
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const pause = useCallback(() => {
@@ -693,12 +791,18 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         /* ignore */
       }
     } else {
-      audioRef.current?.pause();
+      // Pause both decks if crossfade is active
+      getActiveAudio()?.pause();
+      if (crossfadeActiveRef.current) {
+        getInactiveAudio()?.pause();
+      }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   /* ---- next / previous ---- */
   const next = useCallback(() => {
+    abortCrossfade();
     const s = stateRef.current;
 
     if (s.shuffle && s.tracks.length > 1) {
@@ -720,12 +824,14 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
           /* ignore */
         }
       } else {
-        audioRef.current?.pause();
+        getActiveAudio()?.pause();
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadAndPlay]);
 
   const previous = useCallback(() => {
+    abortCrossfade();
     const s = stateRef.current;
 
     if (s.shuffle && s.playHistory.length > 0) {
@@ -739,7 +845,98 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       const track = s.tracks[prevIdx];
       if (track) loadAndPlay(track).catch(() => {});
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadAndPlay]);
+
+  /* ---- Crossfade: auto-advance with smooth volume ramp ---- */
+  const startCrossfade = useCallback(async () => {
+    const s = stateRef.current;
+    if (crossfadeActiveRef.current) return;
+    if (s.tracks.length === 0) return;
+
+    // Determine next track (same logic as next())
+    let nextIdx: number;
+    if (s.shuffle && s.tracks.length > 1) {
+      nextIdx = pickRandomIndex(s.tracks.length, s.currentIndex);
+    } else if (s.currentIndex < s.tracks.length - 1) {
+      nextIdx = s.currentIndex + 1;
+    } else {
+      // End of playlist — no crossfade
+      return;
+    }
+
+    const nextTrack = s.tracks[nextIdx];
+    if (!nextTrack) return;
+
+    // Cannot crossfade into/out of YouTube
+    if (nextTrack.source === "youtube") return;
+    if (activeEngineRef.current === "youtube") return;
+
+    const outgoingAudio = getActiveAudio();
+    const incomingAudio = getInactiveAudio();
+    if (!outgoingAudio || !incomingAudio) return;
+
+    // Mark crossfade as active (prevents re-trigger)
+    crossfadeActiveRef.current = true;
+
+    // Resolve stream URL for the incoming track
+    let streamUrl: string;
+    try {
+      const cached = streamCacheRef.current.get(nextTrack.id);
+      if (typeof cached === "string") {
+        streamUrl = cached;
+      } else if (cached) {
+        streamUrl = await cached;
+      } else {
+        streamUrl = await freshStreamFetch(nextTrack.id);
+      }
+    } catch {
+      // Failed to resolve — abort crossfade, let normal ended→next handle it
+      crossfadeActiveRef.current = false;
+      return;
+    }
+
+    // Load and start playing the incoming track (silent)
+    incomingAudio.src = streamUrl;
+    incomingAudio.volume = 0;
+    incomingAudio.load();
+
+    try {
+      await incomingAudio.play();
+    } catch {
+      // Play failed — abort crossfade
+      crossfadeActiveRef.current = false;
+      incomingAudio.src = "";
+      return;
+    }
+
+    // Dispatch state update for the new track
+    dispatch({ type: "PLAY_INDEX", index: nextIdx });
+
+    // Flip the deck pointer: incoming becomes current
+    currentDeckRef.current = currentDeckRef.current === "A" ? "B" : "A";
+
+    // Start volume ramp with equal-power crossfade curve
+    const userVolume = volumeRef.current / 100;
+    crossfadeStartTimeRef.current = Date.now();
+
+    crossfadeIntervalRef.current = setInterval(() => {
+      const elapsed = (Date.now() - crossfadeStartTimeRef.current) / 1000;
+      const t = Math.min(elapsed / CROSSFADE_DURATION, 1);
+
+      // Equal-power curve: cos for fade-out, sin for fade-in
+      outgoingAudio.volume = userVolume * Math.cos(t * Math.PI / 2);
+      incomingAudio.volume = userVolume * Math.sin(t * Math.PI / 2);
+
+      if (t >= 1) {
+        finalizeCrossfade(outgoingAudio);
+      }
+    }, 50);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [freshStreamFetch]);
+
+  // Keep startCrossfade ref up to date (called from timeupdate handler in useEffect)
+  startCrossfadeRef.current = startCrossfade;
 
   /* ---- Stable ref for next(), used inside audio "ended" handler ---- */
   const nextRef = useRef(next);
