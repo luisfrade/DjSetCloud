@@ -85,21 +85,34 @@ function buildQueries(): string[] {
 }
 
 /**
- * Derive genre from the search query and optionally enrich with
- * keywords found in the video title (e.g. "lofi" in the title
- * of a track found via "house music dj set").
+ * Genre keywords to detect in track titles and enrich the genre tag.
+ * Each entry has a canonical tag and title patterns (lowercase) to match.
+ * Plain "house" is excluded — too generic ("warehouse", "in the house")
+ * and all house sub-genres already contain "house" for substring matching.
+ */
+const TITLE_GENRE_HINTS = [
+  { tag: "afro house", patterns: ["afro house", "afrohouse", "afro-house"] },
+  { tag: "tech house", patterns: ["tech house", "techhouse", "tech-house"] },
+  { tag: "techno", patterns: ["techno"] },
+  { tag: "lofi", patterns: ["lofi", "lo-fi", "lo fi"] },
+];
+
+/**
+ * Derive genre from the search query and enrich with keywords found
+ * in the video title (e.g. a track found via "house music dj set"
+ * whose title mentions "techno" also gets tagged as techno).
  */
 function deriveGenre(query: string, title: string): string {
   let genre = query.replace(" dj set", "").replace(" music", "");
   const titleLower = title.toLowerCase();
-  const genreLower = genre.toLowerCase();
+  const genreNorm = genre.toLowerCase().replace(/[-\s]/g, "");
 
-  // If title mentions lofi/lo-fi but the query-derived genre doesn't, prepend it
-  if (
-    (titleLower.includes("lofi") || titleLower.includes("lo-fi")) &&
-    !genreLower.includes("lofi") && !genreLower.includes("lo-fi")
-  ) {
-    genre = "lofi, " + genre;
+  for (const { tag, patterns } of TITLE_GENRE_HINTS) {
+    const tagNorm = tag.replace(/[-\s]/g, "");
+    if (genreNorm.includes(tagNorm)) continue; // already tagged
+    if (patterns.some((p) => titleLower.includes(p))) {
+      genre = tag + ", " + genre;
+    }
   }
 
   return genre;

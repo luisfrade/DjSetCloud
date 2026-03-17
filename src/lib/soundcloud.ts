@@ -93,9 +93,22 @@ interface SearchParams {
 }
 
 /**
+ * Genre keywords to detect in track titles and enrich the genre tag.
+ * Each entry has a canonical tag and title patterns (lowercase) to match.
+ * Plain "house" is excluded — too generic ("warehouse", "in the house")
+ * and all house sub-genres already contain "house" for substring matching.
+ */
+const TITLE_GENRE_HINTS = [
+  { tag: "afro house", patterns: ["afro house", "afrohouse", "afro-house"] },
+  { tag: "tech house", patterns: ["tech house", "techhouse", "tech-house"] },
+  { tag: "techno", patterns: ["techno"] },
+  { tag: "lofi", patterns: ["lofi", "lo-fi", "lo fi"] },
+];
+
+/**
  * Derive the genre for a SoundCloud track.
- * Uses the search genre when the native genre doesn't match.
- * Also enriches with "lofi" if the title mentions it.
+ * Uses the search genre when the native genre doesn't match,
+ * then enriches with any genres detected in the title.
  */
 function deriveSCGenre(nativeGenre: string, title: string, searchGenre: string): string {
   const norm = (s: string) => s.toLowerCase().replace(/[-\s]/g, "");
@@ -108,14 +121,15 @@ function deriveSCGenre(nativeGenre: string, title: string, searchGenre: string):
     genre = searchGenre;
   }
 
-  // If title mentions lofi/lo-fi but genre doesn't, prepend it
+  // Enrich with genre keywords found in the title
   const titleLower = title.toLowerCase();
   const genreNorm = norm(genre);
-  if (
-    (titleLower.includes("lofi") || titleLower.includes("lo-fi")) &&
-    !genreNorm.includes("lofi")
-  ) {
-    genre = "lofi, " + genre;
+  for (const { tag, patterns } of TITLE_GENRE_HINTS) {
+    const tagNorm = tag.replace(/[-\s]/g, "");
+    if (genreNorm.includes(tagNorm)) continue; // already tagged
+    if (patterns.some((p) => titleLower.includes(p))) {
+      genre = tag + ", " + genre;
+    }
   }
 
   return genre;
