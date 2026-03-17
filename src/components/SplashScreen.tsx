@@ -16,11 +16,22 @@ export default function SplashScreen({ onComplete, isLoaded }: SplashScreenProps
   // exit: fade out (~0.5s), then call onComplete
   const [phase, setPhase] = useState<"intro" | "idle" | "exit">("intro");
 
+  // Wait one frame after mount before showing animated content.
+  // iPad Safari can paint elements before CSS animations are parsed,
+  // causing a flash of the unstyled disc in the wrong position.
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => setReady(true));
+    });
+  }, []);
+
   // After intro animation finishes, switch to idle
   useEffect(() => {
+    if (!ready) return;
     const timer = setTimeout(() => setPhase("idle"), 1600);
     return () => clearTimeout(timer);
-  }, []);
+  }, [ready]);
 
   // Once data is loaded AND we're past intro, start exit
   useEffect(() => {
@@ -56,8 +67,12 @@ export default function SplashScreen({ onComplete, isLoaded }: SplashScreenProps
         }}
       />
 
-      {/* Centered content — fixed height prevents layout shift as elements animate in */}
-      <div className="relative flex flex-col items-center gap-5" style={{ minHeight: 220 }}>
+      {/* Centered content — hidden until browser has completed initial layout (2 rAF frames)
+           to prevent iPad Safari from flashing the disc off-center before animations start */}
+      <div
+        className="relative flex flex-col items-center gap-5"
+        style={{ minHeight: 220, opacity: ready ? 1 : 0 }}
+      >
         {/* Vinyl disc + glow wrapper (self-contained positioning) */}
         <div className="relative flex items-center justify-center" style={{ width: 96, height: 96 }}>
           {/* Glow pulse behind disc */}
