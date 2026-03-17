@@ -8,6 +8,7 @@ import Player from "@/components/Player";
 import ClockOverlay from "@/components/ClockOverlay";
 import YouTubePlayer from "@/components/YouTubePlayer";
 import SplashScreen from "@/components/SplashScreen";
+import SearchFilter from "@/components/SearchFilter";
 
 const REFRESH_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
 const MIN_VISIBILITY_REFRESH_MS = 5 * 60 * 1000; // 5 min minimum between refreshes
@@ -28,6 +29,8 @@ export default function Home() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [showClock, setShowClock] = useState(false);
   const [showSplash, setShowSplash] = useState(true);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [activeGenre, setActiveGenre] = useState("all");
   const initialFetchDone = useRef(false);
   const lastRefreshRef = useRef(Date.now());
   const inactivityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -211,11 +214,16 @@ export default function Home() {
             </svg>
           </div>
           <h1 className="text-xl font-bold text-white">DjSetCloud</h1>
-          <span className="text-xs text-white/30 ml-auto">
-            Afro House / House / Techno / Tech House
-          </span>
         </div>
       </header>
+
+      {/* Search & Genre Filters */}
+      <SearchFilter
+        searchQuery={searchQuery}
+        onSearchChange={setSearchQuery}
+        activeGenre={activeGenre}
+        onGenreChange={setActiveGenre}
+      />
 
       {/* Feed */}
       <Feed
@@ -224,6 +232,8 @@ export default function Home() {
         isLoadingMore={isLoadingMore}
         onRefresh={handleRefresh}
         isRefreshing={isRefreshing}
+        searchQuery={searchQuery}
+        activeGenre={activeGenre}
       />
 
       {/* Player */}

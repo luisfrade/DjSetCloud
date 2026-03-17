@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, useCallback, useEffect } from "react";
+import { useRef, useState, useCallback, useEffect, useMemo } from "react";
 import { usePlayer } from "@/context/PlayerContext";
 import TrackCard from "./TrackCard";
 
@@ -10,6 +10,8 @@ interface FeedProps {
   isLoadingMore: boolean;
   onRefresh?: () => void;
   isRefreshing?: boolean;
+  searchQuery: string;
+  activeGenre: string;
 }
 
 const PULL_THRESHOLD = 80; // px the user must drag to trigger refresh
@@ -20,6 +22,8 @@ export default function Feed({
   isLoadingMore,
   onRefresh,
   isRefreshing,
+  searchQuery,
+  activeGenre,
 }: FeedProps) {
   const { state } = usePlayer();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -124,6 +128,31 @@ export default function Feed({
     );
   }
 
+  // ——— Client-side filtering (preserves original indices for playback) ———
+  const isFiltered = searchQuery.trim() !== "" || activeGenre !== "all";
+
+  const filteredTracks = useMemo(() => {
+    const query = searchQuery.toLowerCase().trim();
+    const genre = activeGenre.toLowerCase();
+
+    return state.tracks
+      .map((track, originalIndex) => ({ track, originalIndex }))
+      .filter(({ track }) => {
+        // Genre filter
+        if (genre !== "all") {
+          const trackGenre = (track.genre || "").toLowerCase();
+          if (!trackGenre.includes(genre)) return false;
+        }
+        // Search filter
+        if (query) {
+          const title = track.title.toLowerCase();
+          const artist = track.user.username.toLowerCase();
+          if (!title.includes(query) && !artist.includes(query)) return false;
+        }
+        return true;
+      });
+  }, [state.tracks, searchQuery, activeGenre]);
+
   const pastThreshold = pullDistance >= PULL_THRESHOLD;
 
   return (
@@ -164,9 +193,27 @@ export default function Feed({
       </div>
 
       <div className="max-w-3xl mx-auto px-4 py-4 space-y-1">
-        {state.tracks.map((track, index) => (
-          <TrackCard key={track.id} track={track} index={index} />
+        {/* Result count when filtering */}
+        {isFiltered && filteredTracks.length > 0 && (
+          <p className="text-xs text-white/30 pb-2">
+            Showing {filteredTracks.length} of {state.tracks.length} sets
+          </p>
+        )}
+
+        {/* Filtered track list — originalIndex preserves playback correctness */}
+        {filteredTracks.map(({ track, originalIndex }) => (
+          <TrackCard key={track.id} track={track} index={originalIndex} />
         ))}
+
+        {/* Empty filter state */}
+        {isFiltered && filteredTracks.length === 0 && state.tracks.length > 0 && (
+          <div className="flex flex-col items-center gap-3 py-12 text-center">
+            <svg className="w-10 h-10 text-white/15" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
+            </svg>
+            <p className="text-sm text-white/40">No sets match your search</p>
+          </div>
+        )}
 
         {/* Infinite scroll sentinel */}
         <div ref={sentinelRef} className="h-1" />
