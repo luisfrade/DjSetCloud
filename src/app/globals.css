@@ -200,6 +200,16 @@ body {
   }
 }
 
+/* Player mini-visualizer bar bounce */
+@keyframes vizBar {
+  0% {
+    transform: scaleY(0.2);
+  }
+  100% {
+    transform: scaleY(1);
+  }
+}
+
 /* Custom scrollbar */
 ::-webkit-scrollbar {
   width: 6px;

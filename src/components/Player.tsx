@@ -4,6 +4,7 @@ import { useRef, useCallback, useState } from "react";
 import { usePlayer } from "@/context/PlayerContext";
 import { formatTime } from "@/lib/formatters";
 import GeneratedArtwork from "@/components/GeneratedArtwork";
+import MiniVisualizer from "@/components/MiniVisualizer";
 
 interface PlayerProps {
   onRefresh?: () => void;
@@ -71,6 +72,11 @@ export default function Player({
 
   return (
     <div className="fixed bottom-0 left-0 right-0 z-50 bg-gray-900 border-t border-white/10">
+      {/* Mini visualizer */}
+      <div className="max-w-5xl mx-auto px-1">
+        <MiniVisualizer isPlaying={state.isPlaying} />
+      </div>
+
       {/* Progress bar (clickable for scrubbing) */}
       <div
         ref={progressBarRef}
