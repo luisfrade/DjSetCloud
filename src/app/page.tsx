@@ -66,6 +66,13 @@ export default function Home() {
       });
   }, [setTracks, setError, setIsLoading, cacheStreamUrls, preloadStreams]);
 
+  // Register service worker for PWA support
+  useEffect(() => {
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("/sw.js").catch(() => {});
+    }
+  }, []);
+
   // 2-minute inactivity timer — show clock overlay when audio is playing
   useEffect(() => {
     const INACTIVITY_MS = 2 * 60 * 1000;
