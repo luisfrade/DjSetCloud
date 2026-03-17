@@ -174,6 +174,11 @@ export default function Home() {
 
   return (
     <div className="flex flex-col h-screen bg-gray-950">
+      {/* Hide page content while splash is visible to prevent iPad Safari flash */}
+      <div
+        className="flex flex-col flex-1 min-h-0"
+        style={showSplash ? { visibility: "hidden" } : undefined}
+      >
       {/* Header */}
       <header className="flex-shrink-0 border-b border-white/10 px-4 py-4">
         <div className="max-w-3xl mx-auto flex items-center gap-3">
@@ -251,6 +256,7 @@ export default function Home() {
 
       {/* YouTube IFrame Player (hidden) */}
       <YouTubePlayer />
+      </div>
 
       {/* Clock overlay */}
       {showClock && <ClockOverlay onClose={() => setShowClock(false)} />}

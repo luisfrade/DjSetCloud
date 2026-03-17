@@ -82,12 +82,15 @@ export default function SplashScreen({ onComplete, isLoaded }: SplashScreenProps
           {/* Vinyl disc */}
           <div
             className="relative"
-            style={{
-              animation:
-                phase === "intro"
-                  ? "splashDisc 1.2s cubic-bezier(0.22, 1, 0.36, 1) forwards"
-                  : undefined,
-            }}
+            style={
+              phase === "intro"
+                ? {
+                    opacity: 0,
+                    transform: "scale(0)",
+                    animation: "splashDisc 1.2s cubic-bezier(0.22, 1, 0.36, 1) forwards",
+                  }
+                : undefined
+            }
           >
             <div
               className="w-20 h-20 bg-blue-500 rounded-full flex items-center justify-center shadow-[0_0_40px_rgba(59,130,246,0.5)]"
