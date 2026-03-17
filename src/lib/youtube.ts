@@ -58,6 +58,7 @@ const BASE_QUERIES = [
   "techno dj set",
   "tech house dj set",
   "lofi dj set",
+  "lo-fi house dj set",
 ];
 
 const MIN_DURATION_SEC = 40 * 60; // 40 minutes
@@ -81,6 +82,27 @@ function buildQueries(): string[] {
   }
 
   return queries;
+}
+
+/**
+ * Derive genre from the search query and optionally enrich with
+ * keywords found in the video title (e.g. "lofi" in the title
+ * of a track found via "house music dj set").
+ */
+function deriveGenre(query: string, title: string): string {
+  let genre = query.replace(" dj set", "").replace(" music", "");
+  const titleLower = title.toLowerCase();
+  const genreLower = genre.toLowerCase();
+
+  // If title mentions lofi/lo-fi but the query-derived genre doesn't, prepend it
+  if (
+    (titleLower.includes("lofi") || titleLower.includes("lo-fi")) &&
+    !genreLower.includes("lofi") && !genreLower.includes("lo-fi")
+  ) {
+    genre = "lofi, " + genre;
+  }
+
+  return genre;
 }
 
 /**
@@ -127,7 +149,7 @@ export async function fetchYouTubeTracks(): Promise<Track[]> {
           artwork_url: item.thumbnail || null,
           duration: item.duration * 1000, // convert seconds → ms
           created_at: createdAt,
-          genre: query.replace(" dj set", "").replace(" music", ""),
+          genre: deriveGenre(query, item.title),
           user: {
             username: item.uploaderName || "Unknown",
             avatar_url: item.uploaderAvatar || "",

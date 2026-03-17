@@ -92,6 +92,35 @@ interface SearchParams {
   skipDateFilter?: boolean;
 }
 
+/**
+ * Derive the genre for a SoundCloud track.
+ * Uses the search genre when the native genre doesn't match.
+ * Also enriches with "lofi" if the title mentions it.
+ */
+function deriveSCGenre(nativeGenre: string, title: string, searchGenre: string): string {
+  const norm = (s: string) => s.toLowerCase().replace(/[-\s]/g, "");
+  let genre = nativeGenre || "";
+
+  // If native genre doesn't include the search genre, prepend it
+  if (genre && !norm(genre).includes(norm(searchGenre))) {
+    genre = searchGenre + ", " + genre;
+  } else if (!genre) {
+    genre = searchGenre;
+  }
+
+  // If title mentions lofi/lo-fi but genre doesn't, prepend it
+  const titleLower = title.toLowerCase();
+  const genreNorm = norm(genre);
+  if (
+    (titleLower.includes("lofi") || titleLower.includes("lo-fi")) &&
+    !genreNorm.includes("lofi")
+  ) {
+    genre = "lofi, " + genre;
+  }
+
+  return genre;
+}
+
 async function searchTracksForGenre(
   params: SearchParams,
   clientId: string
@@ -151,7 +180,7 @@ async function searchTracksForGenre(
         artwork_url: t.artwork_url,
         duration: t.duration,
         created_at: t.created_at,
-        genre: t.genre,
+        genre: deriveSCGenre(t.genre, t.title, params.genre),
         user: {
           username: t.user.username,
           avatar_url: t.user.avatar_url,
@@ -160,7 +189,7 @@ async function searchTracksForGenre(
     });
 }
 
-const GENRES = ["afro house", "house", "techno", "tech house", "lofi"];
+const GENRES = ["afro house", "house", "techno", "tech house", "lofi", "lo-fi house"];
 const MIN_DURATION_MS = 40 * 60 * 1000; // 40 minutes
 
 /**

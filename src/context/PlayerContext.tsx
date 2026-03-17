@@ -61,8 +61,9 @@ function getFilteredIndices(tracks: Track[], filter: PlaybackFilter): number[] {
   for (let i = 0; i < tracks.length; i++) {
     const track = tracks[i];
     if (genre !== "all") {
-      const trackGenre = (track.genre || "").toLowerCase();
-      if (!trackGenre.includes(genre)) continue;
+      const trackGenre = (track.genre || "").toLowerCase().replace(/[-\s]/g, "");
+      const normalizedGenre = genre.replace(/[-\s]/g, "");
+      if (!trackGenre.includes(normalizedGenre)) continue;
     }
     if (query) {
       const title = track.title.toLowerCase();

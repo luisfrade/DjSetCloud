@@ -102,10 +102,11 @@ export default function Feed({
     return state.tracks
       .map((track, originalIndex) => ({ track, originalIndex }))
       .filter(({ track }) => {
-        // Genre filter
+        // Genre filter (normalize hyphens/spaces so "lo-fi" matches "lofi" etc.)
         if (genre !== "all") {
-          const trackGenre = (track.genre || "").toLowerCase();
-          if (!trackGenre.includes(genre)) return false;
+          const trackGenre = (track.genre || "").toLowerCase().replace(/[-\s]/g, "");
+          const normalizedGenre = genre.replace(/[-\s]/g, "");
+          if (!trackGenre.includes(normalizedGenre)) return false;
         }
         // Search filter
         if (query) {
