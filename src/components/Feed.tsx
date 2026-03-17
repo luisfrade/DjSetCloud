@@ -91,6 +91,32 @@ export default function Feed({
     setPullDistance(0);
   }, [pullDistance, onRefresh, isRefreshing]);
 
+  // ——— Client-side filtering (preserves original indices for playback) ———
+  // Must be above early returns to satisfy Rules of Hooks
+  const isFiltered = searchQuery.trim() !== "" || activeGenre !== "all";
+
+  const filteredTracks = useMemo(() => {
+    const query = searchQuery.toLowerCase().trim();
+    const genre = activeGenre.toLowerCase();
+
+    return state.tracks
+      .map((track, originalIndex) => ({ track, originalIndex }))
+      .filter(({ track }) => {
+        // Genre filter
+        if (genre !== "all") {
+          const trackGenre = (track.genre || "").toLowerCase();
+          if (!trackGenre.includes(genre)) return false;
+        }
+        // Search filter
+        if (query) {
+          const title = track.title.toLowerCase();
+          const artist = track.user.username.toLowerCase();
+          if (!title.includes(query) && !artist.includes(query)) return false;
+        }
+        return true;
+      });
+  }, [state.tracks, searchQuery, activeGenre]);
+
   if (state.isLoading) {
     return (
       <div className="flex-1 flex items-center justify-center">
@@ -127,31 +153,6 @@ export default function Feed({
       </div>
     );
   }
-
-  // ——— Client-side filtering (preserves original indices for playback) ———
-  const isFiltered = searchQuery.trim() !== "" || activeGenre !== "all";
-
-  const filteredTracks = useMemo(() => {
-    const query = searchQuery.toLowerCase().trim();
-    const genre = activeGenre.toLowerCase();
-
-    return state.tracks
-      .map((track, originalIndex) => ({ track, originalIndex }))
-      .filter(({ track }) => {
-        // Genre filter
-        if (genre !== "all") {
-          const trackGenre = (track.genre || "").toLowerCase();
-          if (!trackGenre.includes(genre)) return false;
-        }
-        // Search filter
-        if (query) {
-          const title = track.title.toLowerCase();
-          const artist = track.user.username.toLowerCase();
-          if (!title.includes(query) && !artist.includes(query)) return false;
-        }
-        return true;
-      });
-  }, [state.tracks, searchQuery, activeGenre]);
 
   const pastThreshold = pullDistance >= PULL_THRESHOLD;
 
