@@ -11,12 +11,12 @@ interface SearchFilterProps {
 
 const GENRE_CHIPS = [
   { label: "All", value: "all" },
+  { label: "Following", value: "following" },
   { label: "Afro House", value: "afro house" },
   { label: "House", value: "house" },
   { label: "Techno", value: "techno" },
   { label: "Tech House", value: "tech house" },
   { label: "Lofi", value: "lofi" },
-  { label: "Following", value: "following" },
 ];
 
 export default function SearchFilter({
