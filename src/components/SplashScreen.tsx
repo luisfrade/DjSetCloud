@@ -56,45 +56,47 @@ export default function SplashScreen({ onComplete, isLoaded }: SplashScreenProps
         }}
       />
 
-      {/* Centered content */}
-      <div className="relative flex flex-col items-center gap-5">
-        {/* Glow pulse behind disc */}
-        <div
-          className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-24 h-24 rounded-full"
-          style={{
-            background: "radial-gradient(circle, rgba(59,130,246,0.6) 0%, transparent 70%)",
-            animation: "splashGlow 1.2s ease-out forwards",
-          }}
-        />
-
-        {/* Second glow wave (delayed) */}
-        <div
-          className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-24 h-24 rounded-full"
-          style={{
-            background: "radial-gradient(circle, rgba(59,130,246,0.4) 0%, transparent 70%)",
-            animation: "splashGlow 1.2s ease-out 0.3s forwards",
-            opacity: 0,
-          }}
-        />
-
-        {/* Vinyl disc */}
-        <div
-          className="relative"
-          style={{
-            animation:
-              phase === "intro"
-                ? "splashDisc 1.2s cubic-bezier(0.22, 1, 0.36, 1) forwards"
-                : undefined,
-          }}
-        >
+      {/* Centered content — fixed height prevents layout shift as elements animate in */}
+      <div className="relative flex flex-col items-center gap-5" style={{ minHeight: 220 }}>
+        {/* Vinyl disc + glow wrapper (self-contained positioning) */}
+        <div className="relative flex items-center justify-center" style={{ width: 96, height: 96 }}>
+          {/* Glow pulse behind disc */}
           <div
-            className="w-20 h-20 bg-blue-500 rounded-full flex items-center justify-center shadow-[0_0_40px_rgba(59,130,246,0.5)]"
-            style={
-              phase !== "intro"
-                ? { animation: "splashIdleSpin 3s linear infinite" }
-                : undefined
-            }
+            className="absolute inset-0 m-auto w-24 h-24 rounded-full"
+            style={{
+              background: "radial-gradient(circle, rgba(59,130,246,0.6) 0%, transparent 70%)",
+              animation: "splashGlow 1.2s ease-out forwards",
+            }}
+          />
+
+          {/* Second glow wave (delayed) */}
+          <div
+            className="absolute inset-0 m-auto w-24 h-24 rounded-full"
+            style={{
+              background: "radial-gradient(circle, rgba(59,130,246,0.4) 0%, transparent 70%)",
+              animation: "splashGlow 1.2s ease-out 0.3s forwards",
+              opacity: 0,
+            }}
+          />
+
+          {/* Vinyl disc */}
+          <div
+            className="relative"
+            style={{
+              animation:
+                phase === "intro"
+                  ? "splashDisc 1.2s cubic-bezier(0.22, 1, 0.36, 1) forwards"
+                  : undefined,
+            }}
           >
+            <div
+              className="w-20 h-20 bg-blue-500 rounded-full flex items-center justify-center shadow-[0_0_40px_rgba(59,130,246,0.5)]"
+              style={
+                phase !== "intro"
+                  ? { animation: "splashIdleSpin 3s linear infinite" }
+                  : undefined
+              }
+            >
             <svg
               className="w-16 h-16 text-white"
               viewBox="0 0 24 24"
@@ -136,6 +138,7 @@ export default function SplashScreen({ onComplete, isLoaded }: SplashScreenProps
               <circle cx="12" cy="12" r="1.2" fill="currentColor" />
             </svg>
           </div>
+        </div>
         </div>
 
         {/* Title with glitch effect */}
