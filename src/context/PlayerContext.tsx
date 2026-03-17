@@ -60,7 +60,10 @@ function getFilteredIndices(tracks: Track[], filter: PlaybackFilter): number[] {
   const indices: number[] = [];
   for (let i = 0; i < tracks.length; i++) {
     const track = tracks[i];
-    if (genre !== "all") {
+    // "Following" filter — match by source instead of genre
+    if (genre === "following") {
+      if (track.source !== "sc-following") continue;
+    } else if (genre !== "all") {
       const trackGenre = (track.genre || "").toLowerCase().replace(/[-\s]/g, "");
       const normalizedGenre = genre.replace(/[-\s]/g, "");
       if (!trackGenre.includes(normalizedGenre)) continue;

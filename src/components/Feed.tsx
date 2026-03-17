@@ -102,8 +102,11 @@ export default function Feed({
     return state.tracks
       .map((track, originalIndex) => ({ track, originalIndex }))
       .filter(({ track }) => {
-        // Genre filter (normalize hyphens/spaces so "lo-fi" matches "lofi" etc.)
-        if (genre !== "all") {
+        // "Following" filter — match by source instead of genre
+        if (genre === "following") {
+          if (track.source !== "sc-following") return false;
+        } else if (genre !== "all") {
+          // Genre filter (normalize hyphens/spaces so "lo-fi" matches "lofi" etc.)
           const trackGenre = (track.genre || "").toLowerCase().replace(/[-\s]/g, "");
           const normalizedGenre = genre.replace(/[-\s]/g, "");
           if (!trackGenre.includes(normalizedGenre)) return false;
