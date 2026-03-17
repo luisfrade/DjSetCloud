@@ -23,6 +23,7 @@ export default function Home() {
     setIsLoading,
     cacheStreamUrls,
     preloadStreams,
+    setPlaybackFilter,
   } = usePlayer();
   const [nextOffset, setNextOffset] = useState<number | null>(null);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -36,6 +37,11 @@ export default function Home() {
   const inactivityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isPlayingRef = useRef(false);
   isPlayingRef.current = playerState.isPlaying;
+
+  // Sync filter state to PlayerContext so navigation respects the active filter
+  useEffect(() => {
+    setPlaybackFilter({ searchQuery, genre: activeGenre });
+  }, [searchQuery, activeGenre, setPlaybackFilter]);
 
   // Fetch initial tracks (no autoplay — user picks the first track)
   useEffect(() => {

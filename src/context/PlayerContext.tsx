@@ -44,6 +44,36 @@ function pickRandomIndex(total: number, exclude: number): number {
   return idx;
 }
 
+/** Filter criteria synced from the page-level search/genre UI. */
+interface PlaybackFilter {
+  searchQuery: string;
+  genre: string; // "all" means no genre filter
+}
+
+/**
+ * Return the indices (into `tracks`) of tracks that match the given filter.
+ * Logic mirrors Feed.tsx's useMemo filter exactly.
+ */
+function getFilteredIndices(tracks: Track[], filter: PlaybackFilter): number[] {
+  const query = filter.searchQuery.toLowerCase().trim();
+  const genre = filter.genre.toLowerCase();
+  const indices: number[] = [];
+  for (let i = 0; i < tracks.length; i++) {
+    const track = tracks[i];
+    if (genre !== "all") {
+      const trackGenre = (track.genre || "").toLowerCase();
+      if (!trackGenre.includes(genre)) continue;
+    }
+    if (query) {
+      const title = track.title.toLowerCase();
+      const artist = track.user.username.toLowerCase();
+      if (!title.includes(query) && !artist.includes(query)) continue;
+    }
+    indices.push(i);
+  }
+  return indices;
+}
+
 /* ------------------------------------------------------------------ */
 /*  Reducer                                                            */
 /* ------------------------------------------------------------------ */
@@ -181,6 +211,8 @@ interface PlayerContextValue {
   onYTStateChange: (ytState: number) => void;
   onYTError: () => void;
   onYTProgress: (currentTime: number, duration: number) => void;
+  /** Sync the active search/genre filter so navigation respects it. */
+  setPlaybackFilter: (filter: { searchQuery: string; genre: string }) => void;
 }
 
 const PlayerContext = createContext<PlayerContextValue | null>(null);
@@ -205,6 +237,9 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const volumeRef = useRef(initialState.volume);
   const consecutiveErrorsRef = useRef(0);
   const isResolvingRef = useRef(false);
+
+  /* ---- Playback filter ref (synced from page.tsx) ---- */
+  const playbackFilterRef = useRef<PlaybackFilter>({ searchQuery: "", genre: "all" });
 
   /* ---- Crossfade refs ---- */
   const CROSSFADE_DURATION = 6; // seconds
@@ -463,6 +498,11 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     (isLoading: boolean) => dispatch({ type: "SET_LOADING", isLoading }),
     []
   );
+
+  /** Sync the active filter from page.tsx so playback navigation respects it. */
+  const setPlaybackFilter = useCallback((filter: { searchQuery: string; genre: string }) => {
+    playbackFilterRef.current = filter;
+  }, []);
 
   /* ---- Volume — update both engines ---- */
   const setVolume = useCallback((volume: number) => {
@@ -804,25 +844,38 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const next = useCallback(() => {
     abortCrossfade();
     const s = stateRef.current;
+    const filtered = getFilteredIndices(s.tracks, playbackFilterRef.current);
+    const pool = filtered.length > 0 ? filtered : s.tracks.map((_, i) => i);
 
-    if (s.shuffle && s.tracks.length > 1) {
-      const nextIdx = pickRandomIndex(s.tracks.length, s.currentIndex);
-      dispatch({ type: "PLAY_INDEX", index: nextIdx });
-      const track = s.tracks[nextIdx];
+    if (s.shuffle && pool.length > 1) {
+      const eligible = pool.filter((i) => i !== s.currentIndex);
+      if (eligible.length === 0) return;
+      const pick = eligible[Math.floor(Math.random() * eligible.length)];
+      dispatch({ type: "PLAY_INDEX", index: pick });
+      const track = s.tracks[pick];
       if (track) loadAndPlay(track).catch(() => {});
-    } else if (s.currentIndex < s.tracks.length - 1) {
-      const nextIdx = s.currentIndex + 1;
-      dispatch({ type: "PLAY_INDEX", index: nextIdx });
-      const track = s.tracks[nextIdx];
-      if (track) loadAndPlay(track).catch(() => {});
+    } else if (!s.shuffle) {
+      const currentPos = pool.indexOf(s.currentIndex);
+      const nextPos = currentPos + 1; // -1+1=0 if current not in pool → plays first filtered
+      if (nextPos < pool.length) {
+        const nextIdx = pool[nextPos];
+        dispatch({ type: "PLAY_INDEX", index: nextIdx });
+        const track = s.tracks[nextIdx];
+        if (track) loadAndPlay(track).catch(() => {});
+      } else {
+        // End of filtered playlist → pause
+        dispatch({ type: "SET_PLAYING", isPlaying: false });
+        if (activeEngineRef.current === "youtube") {
+          try { ytPlayerRef.current?.pauseVideo(); } catch { /* ignore */ }
+        } else {
+          getActiveAudio()?.pause();
+        }
+      }
     } else {
+      // pool.length <= 1 in shuffle → nothing to shuffle to
       dispatch({ type: "SET_PLAYING", isPlaying: false });
       if (activeEngineRef.current === "youtube") {
-        try {
-          ytPlayerRef.current?.pauseVideo();
-        } catch {
-          /* ignore */
-        }
+        try { ytPlayerRef.current?.pauseVideo(); } catch { /* ignore */ }
       } else {
         getActiveAudio()?.pause();
       }
@@ -835,15 +888,22 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     const s = stateRef.current;
 
     if (s.shuffle && s.playHistory.length > 0) {
+      // Shuffle: use actual history regardless of filter
       const prevIdx = s.playHistory[s.playHistory.length - 1];
       dispatch({ type: "PLAY_PREV_INDEX", index: prevIdx });
       const track = s.tracks[prevIdx];
       if (track) loadAndPlay(track).catch(() => {});
-    } else if (s.currentIndex > 0) {
-      const prevIdx = s.currentIndex - 1;
-      dispatch({ type: "PLAY_INDEX", index: prevIdx });
-      const track = s.tracks[prevIdx];
-      if (track) loadAndPlay(track).catch(() => {});
+    } else if (!s.shuffle) {
+      // Sequential: go to previous track in filtered set
+      const filtered = getFilteredIndices(s.tracks, playbackFilterRef.current);
+      const pool = filtered.length > 0 ? filtered : s.tracks.map((_, i) => i);
+      const currentPos = pool.indexOf(s.currentIndex);
+      if (currentPos > 0) {
+        const prevIdx = pool[currentPos - 1];
+        dispatch({ type: "PLAY_INDEX", index: prevIdx });
+        const track = s.tracks[prevIdx];
+        if (track) loadAndPlay(track).catch(() => {});
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadAndPlay]);
@@ -854,15 +914,21 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     if (crossfadeActiveRef.current) return;
     if (s.tracks.length === 0) return;
 
-    // Determine next track (same logic as next())
+    // Determine next track (filter-aware, same logic as next())
+    const filtered = getFilteredIndices(s.tracks, playbackFilterRef.current);
+    const pool = filtered.length > 0 ? filtered : s.tracks.map((_, i) => i);
+
     let nextIdx: number;
-    if (s.shuffle && s.tracks.length > 1) {
-      nextIdx = pickRandomIndex(s.tracks.length, s.currentIndex);
-    } else if (s.currentIndex < s.tracks.length - 1) {
-      nextIdx = s.currentIndex + 1;
+    if (s.shuffle && pool.length > 1) {
+      const eligible = pool.filter((i) => i !== s.currentIndex);
+      if (eligible.length === 0) return;
+      nextIdx = eligible[Math.floor(Math.random() * eligible.length)];
+    } else if (!s.shuffle) {
+      const currentPos = pool.indexOf(s.currentIndex);
+      if (currentPos + 1 >= pool.length) return; // End of filtered playlist — no crossfade
+      nextIdx = pool[currentPos + 1];
     } else {
-      // End of playlist — no crossfade
-      return;
+      return; // pool.length <= 1, nothing to crossfade to
     }
 
     const nextTrack = s.tracks[nextIdx];
@@ -1144,6 +1210,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         onYTStateChange,
         onYTError,
         onYTProgress,
+        setPlaybackFilter,
       }}
     >
       {children}
