@@ -128,16 +128,18 @@ export default function Home() {
       });
   }, [isRefreshing, refreshTracks]);
 
-  // Auto-refresh feed every 30 minutes
+  // Robust auto-refresh: combines multiple strategies to ensure the feed
+  // is always updated at least every REFRESH_INTERVAL_MS (30 min), even
+  // on mobile Safari where setInterval is throttled in background tabs.
   useEffect(() => {
+    // 1. Standard interval (works when tab is active/foreground)
     const interval = setInterval(() => {
-      handleRefresh();
+      if (Date.now() - lastRefreshRef.current >= REFRESH_INTERVAL_MS) {
+        handleRefresh();
+      }
     }, REFRESH_INTERVAL_MS);
-    return () => clearInterval(interval);
-  }, [handleRefresh]);
 
-  // Refresh when user returns to the tab (if enough time has passed)
-  useEffect(() => {
+    // 2. Visibility change — fires when returning from background/other app
     const onVisibilityChange = () => {
       if (
         document.visibilityState === "visible" &&
@@ -146,9 +148,33 @@ export default function Home() {
         handleRefresh();
       }
     };
+
+    // 3. Focus — catches cases where visibilitychange doesn't fire (some
+    //    mobile browsers, PWA returning to foreground)
+    const onFocus = () => {
+      if (Date.now() - lastRefreshRef.current > MIN_VISIBILITY_REFRESH_MS) {
+        handleRefresh();
+      }
+    };
+
+    // 4. Short-interval watchdog — every 5 min, check if a refresh is overdue.
+    //    This catches the mobile Safari case where the main interval was
+    //    throttled/paused but the tab is now active again.
+    const watchdog = setInterval(() => {
+      if (Date.now() - lastRefreshRef.current >= REFRESH_INTERVAL_MS) {
+        handleRefresh();
+      }
+    }, 5 * 60 * 1000);
+
     document.addEventListener("visibilitychange", onVisibilityChange);
-    return () =>
+    window.addEventListener("focus", onFocus);
+
+    return () => {
+      clearInterval(interval);
+      clearInterval(watchdog);
       document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("focus", onFocus);
+    };
   }, [handleRefresh]);
 
   const handleLoadMore = useCallback(() => {
