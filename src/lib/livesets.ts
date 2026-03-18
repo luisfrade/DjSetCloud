@@ -24,12 +24,11 @@ const MIN_DURATION_SEC = 40 * 60; // 40 minutes
  * then filtering by genre and duration.
  */
 export async function fetchLivesetsTracks(): Promise<Track[]> {
-  const results: Track[] = [];
-  const seenIds = new Set<string>();
+  const pages = [1, 2, 3, 4];
 
-  // Fetch the first 4 pages of newest sessions for more content
-  for (const page of [1, 2, 3, 4]) {
-    try {
+  // Fetch all 4 pages in parallel
+  const pageResults = await Promise.allSettled(
+    pages.map(async (page) => {
       const url =
         page === 1
           ? `${BASE}/session/all/new`
@@ -46,55 +45,62 @@ export async function fetchLivesetsTracks(): Promise<Track[]> {
       });
 
       if (!res.ok) {
-        console.error(`Livesets page ${page} returned ${res.status}`);
-        continue;
+        throw new Error(`Livesets page ${page} returned ${res.status}`);
       }
 
       const html = await res.text();
-      const sessions = parseSessionsFromHTML(html);
+      return parseSessionsFromHTML(html);
+    })
+  );
 
-      for (const session of sessions) {
-        if (seenIds.has(session.sessionId)) continue;
-        seenIds.add(session.sessionId);
+  const results: Track[] = [];
+  const seenIds = new Set<string>();
 
-        // Filter by genre
-        const matchesGenre = session.genres.some((g) =>
-          TARGET_GENRES.some(
-            (target) =>
-              g.toLowerCase().includes(target) ||
-              target.includes(g.toLowerCase())
-          )
-        );
-        if (!matchesGenre) continue;
+  for (const result of pageResults) {
+    if (result.status !== "fulfilled") {
+      console.error("Livesets page fetch failed:", result.reason);
+      continue;
+    }
 
-        // Filter by duration (>= 40 min)
-        if (session.durationSec < MIN_DURATION_SEC) continue;
+    for (const session of result.value) {
+      if (seenIds.has(session.sessionId)) continue;
+      seenIds.add(session.sessionId);
 
-        // Build a descriptive title instead of generic "Session #X"
-        const artist = session.artist || session.username;
-        const genreLabel =
-          session.genres.length > 0 && session.genres[0] !== "Unknown"
-            ? session.genres.join(" / ") + " Mix"
-            : "DJ Set";
-        const descriptiveTitle = `${artist} — ${genreLabel}`;
+      // Filter by genre
+      const matchesGenre = session.genres.some((g) =>
+        TARGET_GENRES.some(
+          (target) =>
+            g.toLowerCase().includes(target) ||
+            target.includes(g.toLowerCase())
+        )
+      );
+      if (!matchesGenre) continue;
 
-        results.push({
-          id: `ls-${session.sessionId}`,
-          source: "livesets",
-          title: descriptiveTitle,
-          permalink_url: `${BASE}/${session.username}/session/${session.sessionId}`,
-          artwork_url: null, // will use generated artwork
-          duration: session.durationSec * 1000, // seconds → ms
-          created_at: parseRelativeDate(session.timeAgo),
-          genre: session.genres.join(", "),
-          user: {
-            username: artist,
-            avatar_url: "",
-          },
-        });
-      }
-    } catch (err) {
-      console.error(`Failed to fetch livesets page ${page}:`, err);
+      // Filter by duration (>= 40 min)
+      if (session.durationSec < MIN_DURATION_SEC) continue;
+
+      // Build a descriptive title instead of generic "Session #X"
+      const artist = session.artist || session.username;
+      const genreLabel =
+        session.genres.length > 0 && session.genres[0] !== "Unknown"
+          ? session.genres.join(" / ") + " Mix"
+          : "DJ Set";
+      const descriptiveTitle = `${artist} — ${genreLabel}`;
+
+      results.push({
+        id: `ls-${session.sessionId}`,
+        source: "livesets",
+        title: descriptiveTitle,
+        permalink_url: `${BASE}/${session.username}/session/${session.sessionId}`,
+        artwork_url: null, // will use generated artwork
+        duration: session.durationSec * 1000, // seconds → ms
+        created_at: parseRelativeDate(session.timeAgo),
+        genre: session.genres.join(", "),
+        user: {
+          username: artist,
+          avatar_url: "",
+        },
+      });
     }
   }
 

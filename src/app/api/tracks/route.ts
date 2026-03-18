@@ -7,6 +7,117 @@ import { Track } from "@/types";
 // Ensure this route is always dynamic (never cached by Vercel)
 export const dynamic = "force-dynamic";
 
+/* ------------------------------------------------------------------ */
+/*  In-memory track cache — avoids refetching external APIs on every   */
+/*  request. TTL = 10 minutes. Shared across requests in the same     */
+/*  serverless instance.                                               */
+/* ------------------------------------------------------------------ */
+const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
+let trackCache: {
+  tracks: Track[];
+  preloadedStreams: Record<string, string>;
+  timestamp: number;
+} | null = null;
+
+/** Check if we're currently fetching (dedup concurrent requests) */
+let fetchInFlight: Promise<{
+  tracks: Track[];
+  preloadedStreams: Record<string, string>;
+}> | null = null;
+
+/**
+ * Fetch tracks from all sources in parallel, deduplicate, sort, and
+ * pre-resolve stream URLs for the first few audio tracks.
+ */
+async function fetchAllTracks(): Promise<{
+  tracks: Track[];
+  preloadedStreams: Record<string, string>;
+}> {
+  // Fetch from all sources in parallel (followings included with a 20s timeout)
+  const followingsWithTimeout = Promise.race([
+    fetchSoundCloudFollowingsTracks(),
+    new Promise<Track[]>((resolve) => setTimeout(() => resolve([]), 20000)),
+  ]);
+
+  const [scResult, ytResult, lsResult, followResult] = await Promise.allSettled([
+    fetchSoundCloudTracks(),
+    fetchYouTubeTracks(),
+    fetchLivesetsTracks(),
+    followingsWithTimeout,
+  ]);
+
+  const allTracks: Track[] = [];
+
+  // Followings first so they win dedup over generic search results
+  if (followResult.status === "fulfilled") {
+    allTracks.push(...followResult.value);
+  } else {
+    console.error("SC followings fetch failed:", followResult.reason);
+  }
+
+  if (scResult.status === "fulfilled") {
+    allTracks.push(...scResult.value);
+  } else {
+    console.error("SoundCloud fetch failed:", scResult.reason);
+  }
+
+  if (ytResult.status === "fulfilled") {
+    allTracks.push(...ytResult.value);
+  } else {
+    console.error("YouTube fetch failed:", ytResult.reason);
+  }
+
+  if (lsResult.status === "fulfilled") {
+    allTracks.push(...lsResult.value);
+  } else {
+    console.error("Livesets fetch failed:", lsResult.reason);
+  }
+
+  // Deduplicate by ID (followings first so they win over generic search results)
+  const seen = new Set<string>();
+  const unique = allTracks.filter((t) => {
+    if (seen.has(t.id)) return false;
+    seen.add(t.id);
+    return true;
+  });
+
+  // Sort by created_at descending (newest first)
+  unique.sort(
+    (a, b) =>
+      new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+  );
+
+  // Pre-resolve stream URLs for the first few audio tracks so the
+  // client can start playback without an extra /api/stream round-trip.
+  const preloadedStreams: Record<string, string> = {};
+  const audioTracks = unique.filter((t) => t.source !== "youtube");
+  const toPreload = audioTracks.slice(0, 5);
+
+  const preloadResults = await Promise.allSettled(
+    toPreload.map(async (track) => {
+      if (track.source === "soundcloud" || track.source === "sc-following") {
+        const numericId = parseInt(track.id.slice(3), 10);
+        const url = await resolveSoundCloudStreamUrl(numericId);
+        return { id: track.id, url };
+      } else if (track.source === "livesets") {
+        const sessionId = track.id.slice(3);
+        const url = await resolveLivesetsStreamUrl(sessionId);
+        return { id: track.id, url };
+      }
+      return null;
+    })
+  );
+
+  for (const result of preloadResults) {
+    if (result.status === "fulfilled" && result.value) {
+      preloadedStreams[result.value.id] = result.value.url;
+    }
+  }
+
+  return { tracks: unique, preloadedStreams };
+}
+
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const offset = parseInt(searchParams.get("offset") || "0", 10);
@@ -16,112 +127,44 @@ export async function GET(request: NextRequest) {
   );
 
   try {
-    // Fetch from all sources in parallel (followings included with a 20s timeout)
-    const followingsWithTimeout = Promise.race([
-      fetchSoundCloudFollowingsTracks(),
-      new Promise<Track[]>((resolve) => setTimeout(() => resolve([]), 20000)),
-    ]);
+    // Use cached data if available and fresh
+    const now = Date.now();
+    let cached = trackCache;
 
-    const [scResult, ytResult, lsResult, followResult] = await Promise.allSettled([
-      fetchSoundCloudTracks(),
-      fetchYouTubeTracks(),
-      fetchLivesetsTracks(),
-      followingsWithTimeout,
-    ]);
+    if (!cached || now - cached.timestamp > CACHE_TTL_MS) {
+      // Cache miss or stale — fetch fresh data (dedup concurrent requests)
+      if (!fetchInFlight) {
+        fetchInFlight = fetchAllTracks().finally(() => {
+          fetchInFlight = null;
+        });
+      }
 
-    const allTracks: Track[] = [];
-
-    // Followings first so they win dedup over generic search results
-    if (followResult.status === "fulfilled") {
-      allTracks.push(...followResult.value);
-    } else {
-      console.error("SC followings fetch failed:", followResult.reason);
+      const fresh = await fetchInFlight;
+      trackCache = { ...fresh, timestamp: Date.now() };
+      cached = trackCache;
     }
 
-    if (scResult.status === "fulfilled") {
-      allTracks.push(...scResult.value);
-    } else {
-      console.error("SoundCloud fetch failed:", scResult.reason);
-    }
+    const { tracks: unique, preloadedStreams } = cached;
 
-    if (ytResult.status === "fulfilled") {
-      allTracks.push(...ytResult.value);
-    } else {
-      console.error("YouTube fetch failed:", ytResult.reason);
-    }
-
-    if (lsResult.status === "fulfilled") {
-      allTracks.push(...lsResult.value);
-    } else {
-      console.error("Livesets fetch failed:", lsResult.reason);
-    }
-
-    if (allTracks.length === 0) {
+    if (unique.length === 0) {
       return NextResponse.json(
         { error: "No tracks found from any source. Please try again later." },
         { status: 503 }
       );
     }
 
-    // Deduplicate by ID (followings first so they win over generic search results)
-    const seen = new Set<string>();
-    const unique = allTracks.filter((t) => {
-      if (seen.has(t.id)) return false;
-      seen.add(t.id);
-      return true;
-    });
-
-    // Sort by created_at descending (newest first)
-    unique.sort(
-      (a, b) =>
-        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-    );
-
     // Apply pagination
     const paginated = unique.slice(offset, offset + limit);
     const nextOffset =
       offset + limit < unique.length ? offset + limit : null;
 
-    // Pre-resolve stream URLs for the first few audio tracks so the
-    // client can start playback without an extra /api/stream round-trip.
-    // The first track (newest) is always included since it auto-plays on load.
-    const preloadedStreams: Record<string, string> = {};
-    if (offset === 0) {
-      const audioTracks = paginated.filter((t) => t.source !== "youtube");
-      const toPreload = audioTracks.slice(0, 5);
-
-      const results = await Promise.allSettled(
-        toPreload.map(async (track) => {
-          if (track.source === "soundcloud" || track.source === "sc-following") {
-            const numericId = parseInt(track.id.slice(3), 10);
-            const url = await resolveSoundCloudStreamUrl(numericId);
-            return { id: track.id, url };
-          } else if (track.source === "livesets") {
-            const sessionId = track.id.slice(3);
-            const url = await resolveLivesetsStreamUrl(sessionId);
-            return { id: track.id, url };
-          }
-          return null;
-        })
-      );
-
-      for (const result of results) {
-        if (result.status === "fulfilled" && result.value) {
-          preloadedStreams[result.value.id] = result.value.url;
-        }
-      }
-    }
-
     const response = NextResponse.json({
       tracks: paginated,
       nextOffset,
-      ...(Object.keys(preloadedStreams).length > 0 && { preloadedStreams }),
+      ...(offset === 0 && Object.keys(preloadedStreams).length > 0 && { preloadedStreams }),
     });
-    // Prevent any caching — always return fresh data
-    response.headers.set(
-      "Cache-Control",
-      "no-store, no-cache, must-revalidate, max-age=0"
-    );
+    // Allow brief browser caching to avoid repeated requests on visibility changes
+    response.headers.set("Cache-Control", "private, max-age=120");
     return response;
   } catch (err) {
     console.error("Failed to fetch tracks:", err);

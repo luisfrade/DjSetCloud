@@ -123,12 +123,11 @@ function deriveGenre(query: string, title: string): string {
  * Playback uses the YouTube IFrame Player API (client-side).
  */
 export async function fetchYouTubeTracks(): Promise<Track[]> {
-  const results: Track[] = [];
-  const seenIds = new Set<string>();
   const queries = buildQueries();
 
-  for (const query of queries) {
-    try {
+  // Fetch all queries in parallel for much faster loading
+  const queryResults = await Promise.allSettled(
+    queries.map(async (query) => {
       const data = await pipedFetch<PipedSearchResponse>(
         `/search?q=${encodeURIComponent(query)}&filter=videos`
       );
@@ -140,37 +139,48 @@ export async function fetchYouTubeTracks(): Promise<Track[]> {
           item.url?.startsWith("/watch?v=")
       );
 
-      for (const item of items) {
+      return items.map((item) => {
         const videoId = item.url.replace("/watch?v=", "");
-        if (seenIds.has(videoId)) continue;
-        seenIds.add(videoId);
 
-        // Derive a reasonable created_at from the uploaded timestamp
         let createdAt: string;
         if (item.uploaded && item.uploaded > 0) {
           createdAt = new Date(item.uploaded).toISOString();
         } else {
-          // Parse relative date as fallback (rough estimate)
           createdAt = parseRelativeDate(item.uploadedDate);
         }
 
-        results.push({
+        return {
           id: `yt-${videoId}`,
-          source: "youtube",
+          source: "youtube" as const,
           title: item.title,
           permalink_url: `https://www.youtube.com/watch?v=${videoId}`,
           artwork_url: item.thumbnail || null,
-          duration: item.duration * 1000, // convert seconds → ms
+          duration: item.duration * 1000,
           created_at: createdAt,
           genre: deriveGenre(query, item.title),
           user: {
             username: item.uploaderName || "Unknown",
             avatar_url: item.uploaderAvatar || "",
           },
-        });
+        };
+      });
+    })
+  );
+
+  // Flatten and deduplicate
+  const results: Track[] = [];
+  const seenIds = new Set<string>();
+
+  for (const result of queryResults) {
+    if (result.status === "fulfilled") {
+      for (const track of result.value) {
+        if (!seenIds.has(track.id)) {
+          seenIds.add(track.id);
+          results.push(track);
+        }
       }
-    } catch (err) {
-      console.error(`Failed to fetch YouTube tracks for "${query}":`, err);
+    } else {
+      console.error("Failed to fetch YouTube tracks:", result.reason);
     }
   }
 

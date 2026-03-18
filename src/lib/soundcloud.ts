@@ -244,48 +244,50 @@ async function fetchGenreWithRetry(
  * Returns a de-duplicated, date-sorted array.
  */
 export async function fetchSoundCloudTracks(): Promise<Track[]> {
-  let clientId = await resolveClientId();
+  const clientId = await resolveClientId();
   const results: Track[] = [];
   const seenIds = new Set<string>();
 
-  // 1. Fetch recent tracks (created in the last month) — prioritize fresh content
-  for (const genre of GENRES) {
-    const { tracks, clientId: updatedId } = await fetchGenreWithRetry(
-      {
-        query: genre + " dj set",
-        genre,
-        minDurationMs: MIN_DURATION_MS,
-        limit: 50,
-      },
-      clientId
-    );
-    clientId = updatedId;
-    for (const t of tracks) {
-      if (!seenIds.has(t.id)) {
-        seenIds.add(t.id);
-        results.push(t);
+  // 1. Fetch recent tracks (created in the last month) — ALL genres in parallel
+  const recentResults = await Promise.allSettled(
+    GENRES.map((genre) =>
+      fetchGenreWithRetry(
+        { query: genre + " dj set", genre, minDurationMs: MIN_DURATION_MS, limit: 50 },
+        clientId
+      )
+    )
+  );
+
+  for (const result of recentResults) {
+    if (result.status === "fulfilled") {
+      for (const t of result.value.tracks) {
+        if (!seenIds.has(t.id)) {
+          seenIds.add(t.id);
+          results.push(t);
+        }
       }
     }
   }
 
-  // 2. If we got fewer than 20 recent tracks, backfill without date filter
+  // 2. If we got fewer than 20 recent tracks, backfill without date filter (also parallel)
   if (results.length < 20) {
-    for (const genre of GENRES) {
-      const { tracks, clientId: updatedId } = await fetchGenreWithRetry(
-        {
-          query: genre + " dj set",
-          genre,
-          minDurationMs: MIN_DURATION_MS,
-          limit: 50,
-          skipDateFilter: true,
-        },
-        clientId
-      );
-      clientId = updatedId;
-      for (const t of tracks) {
-        if (!seenIds.has(t.id)) {
-          seenIds.add(t.id);
-          results.push(t);
+    const backfillClientId = await resolveClientId(); // may have been refreshed by retries above
+    const backfillResults = await Promise.allSettled(
+      GENRES.map((genre) =>
+        fetchGenreWithRetry(
+          { query: genre + " dj set", genre, minDurationMs: MIN_DURATION_MS, limit: 50, skipDateFilter: true },
+          backfillClientId
+        )
+      )
+    );
+
+    for (const result of backfillResults) {
+      if (result.status === "fulfilled") {
+        for (const t of result.value.tracks) {
+          if (!seenIds.has(t.id)) {
+            seenIds.add(t.id);
+            results.push(t);
+          }
         }
       }
     }
@@ -394,7 +396,7 @@ export async function fetchSoundCloudFollowingsTracks(): Promise<Track[]> {
   console.log(`SC followings: ${followingIds.size} followed artist IDs`);
   if (followingIds.size === 0) return [];
 
-  // 3. Search with genre-agnostic queries, keep only tracks from followed artists.
+  // 3. Search with genre-agnostic queries IN PARALLEL, keep only tracks from followed artists.
   //    The duration filter ("epic" = 10min+) plus our own 40-min check does the filtering.
   const searchQueries = [
     "dj set",
@@ -407,11 +409,8 @@ export async function fetchSoundCloudFollowingsTracks(): Promise<Track[]> {
     "session",
   ];
 
-  const results: Track[] = [];
-  const seenIds = new Set<string>();
-
-  for (const query of searchQueries) {
-    try {
+  const queryResults = await Promise.allSettled(
+    searchQueries.map(async (query) => {
       const url = new URL("https://api-v2.soundcloud.com/search/tracks");
       url.searchParams.set("q", query);
       url.searchParams.set("filter.duration", "epic");
@@ -427,25 +426,30 @@ export async function fetchSoundCloudFollowingsTracks(): Promise<Track[]> {
 
       if (res.status === 401 || res.status === 403) {
         clearClientIdCache();
-        clientId = await resolveClientId();
-        continue;
+        throw new Error("auth error");
       }
-      if (!res.ok) continue;
+      if (!res.ok) throw new Error(`SC search error: ${res.status}`);
 
       const data = await res.json();
       const tracks: SCApiTrack[] = data.collection || [];
 
-      for (const t of tracks) {
-        if (t.duration < MIN_DURATION_MS) continue;
-        if (!followingIds.has(t.user.id)) continue; // Only from followed artists
+      return tracks.filter(
+        (t) => t.duration >= MIN_DURATION_MS && followingIds.has(t.user.id)
+      );
+    })
+  );
 
+  const results: Track[] = [];
+  const seenIds = new Set<string>();
+
+  for (const result of queryResults) {
+    if (result.status === "fulfilled") {
+      for (const t of result.value) {
         const id = `sc-${t.id}`;
         if (seenIds.has(id)) continue;
         seenIds.add(id);
         results.push(toFollowingTrack(t));
       }
-    } catch {
-      continue;
     }
   }
 
