@@ -845,19 +845,74 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   }, []);
 
   /* ---- next / previous ---- */
+
+  /** Max consecutive loadAndPlay failures before giving up (prevents infinite skip loop) */
+  const skipRetriesRef = useRef(0);
+  const MAX_SKIP_RETRIES = 5;
+
   const next = useCallback(() => {
     abortCrossfade();
     const s = stateRef.current;
     const filtered = getFilteredIndices(s.tracks, playbackFilterRef.current);
     const pool = filtered.length > 0 ? filtered : s.tracks.map((_, i) => i);
 
+    const stopPlayback = () => {
+      skipRetriesRef.current = 0;
+      dispatch({ type: "SET_PLAYING", isPlaying: false });
+      if (activeEngineRef.current === "youtube") {
+        try { ytPlayerRef.current?.pauseVideo(); } catch { /* ignore */ }
+      } else {
+        getActiveAudio()?.pause();
+      }
+    };
+
+    /**
+     * Try to load a track; on failure, skip to the next one in the pool.
+     * This prevents the player from silently stopping when a stream URL
+     * is expired or a network request fails.
+     */
+    const tryLoadOrSkip = (track: Track, poolIndex: number) => {
+      loadAndPlay(track).then(() => {
+        skipRetriesRef.current = 0; // reset on success
+      }).catch(() => {
+        skipRetriesRef.current += 1;
+        if (skipRetriesRef.current >= MAX_SKIP_RETRIES) {
+          console.warn("Max skip retries reached, stopping playback");
+          stopPlayback();
+          return;
+        }
+        // Try the next track in the pool
+        if (s.shuffle) {
+          const remaining = pool.filter((i) => i !== s.currentIndex && i !== pool[poolIndex]);
+          if (remaining.length === 0) { stopPlayback(); return; }
+          const pick = remaining[Math.floor(Math.random() * remaining.length)];
+          dispatch({ type: "PLAY_INDEX", index: pick });
+          const fallback = s.tracks[pick];
+          if (fallback) tryLoadOrSkip(fallback, pool.indexOf(pick));
+          else stopPlayback();
+        } else {
+          const nextPoolIdx = poolIndex + 1;
+          if (nextPoolIdx < pool.length) {
+            const nextIdx = pool[nextPoolIdx];
+            dispatch({ type: "PLAY_INDEX", index: nextIdx });
+            const fallback = s.tracks[nextIdx];
+            if (fallback) tryLoadOrSkip(fallback, nextPoolIdx);
+            else stopPlayback();
+          } else {
+            stopPlayback();
+          }
+        }
+      });
+    };
+
     if (s.shuffle && pool.length > 1) {
       const eligible = pool.filter((i) => i !== s.currentIndex);
-      if (eligible.length === 0) return;
+      if (eligible.length === 0) { stopPlayback(); return; }
       const pick = eligible[Math.floor(Math.random() * eligible.length)];
       dispatch({ type: "PLAY_INDEX", index: pick });
       const track = s.tracks[pick];
-      if (track) loadAndPlay(track).catch(() => {});
+      if (track) tryLoadOrSkip(track, pool.indexOf(pick));
+      else stopPlayback();
     } else if (!s.shuffle) {
       const currentPos = pool.indexOf(s.currentIndex);
       const nextPos = currentPos + 1; // -1+1=0 if current not in pool → plays first filtered
@@ -865,24 +920,13 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         const nextIdx = pool[nextPos];
         dispatch({ type: "PLAY_INDEX", index: nextIdx });
         const track = s.tracks[nextIdx];
-        if (track) loadAndPlay(track).catch(() => {});
+        if (track) tryLoadOrSkip(track, nextPos);
+        else stopPlayback();
       } else {
-        // End of filtered playlist → pause
-        dispatch({ type: "SET_PLAYING", isPlaying: false });
-        if (activeEngineRef.current === "youtube") {
-          try { ytPlayerRef.current?.pauseVideo(); } catch { /* ignore */ }
-        } else {
-          getActiveAudio()?.pause();
-        }
+        stopPlayback();
       }
     } else {
-      // pool.length <= 1 in shuffle → nothing to shuffle to
-      dispatch({ type: "SET_PLAYING", isPlaying: false });
-      if (activeEngineRef.current === "youtube") {
-        try { ytPlayerRef.current?.pauseVideo(); } catch { /* ignore */ }
-      } else {
-        getActiveAudio()?.pause();
-      }
+      stopPlayback();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadAndPlay]);
@@ -961,8 +1005,10 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         streamUrl = await freshStreamFetch(nextTrack.id);
       }
     } catch {
-      // Failed to resolve — abort crossfade, let normal ended→next handle it
+      // Failed to resolve — the track may have already ended while we
+      // awaited, swallowing the onEnded event. Trigger next() as fallback.
       crossfadeActiveRef.current = false;
+      nextRef.current();
       return;
     }
 
@@ -974,9 +1020,10 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     try {
       await incomingAudio.play();
     } catch {
-      // Play failed — abort crossfade
+      // Play failed — the track may have ended during the await.
       crossfadeActiveRef.current = false;
       incomingAudio.src = "";
+      nextRef.current();
       return;
     }
 
