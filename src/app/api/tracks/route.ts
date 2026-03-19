@@ -163,8 +163,12 @@ export async function GET(request: NextRequest) {
       nextOffset,
       ...(offset === 0 && Object.keys(preloadedStreams).length > 0 && { preloadedStreams }),
     });
-    // Allow brief browser caching to avoid repeated requests on visibility changes
-    response.headers.set("Cache-Control", "private, max-age=120");
+    // Don't let the browser cache API responses — the server-side in-memory
+    // cache already prevents excessive external API calls.
+    response.headers.set(
+      "Cache-Control",
+      "no-store, no-cache, must-revalidate, max-age=0"
+    );
     return response;
   } catch (err) {
     console.error("Failed to fetch tracks:", err);

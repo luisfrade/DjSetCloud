@@ -50,7 +50,7 @@ export default function Home() {
 
     setIsLoading(true);
 
-    fetch("/api/tracks")
+    fetch("/api/tracks", { cache: "no-store" })
       .then((res) => {
         if (!res.ok) throw new Error("Failed to load tracks");
         return res.json();
@@ -107,11 +107,14 @@ export default function Home() {
     };
   }, []);
 
+  const isRefreshingRef = useRef(false);
+
   const handleRefresh = useCallback(() => {
-    if (isRefreshing) return;
+    if (isRefreshingRef.current) return;
+    isRefreshingRef.current = true;
     setIsRefreshing(true);
     lastRefreshRef.current = Date.now();
-    fetch("/api/tracks")
+    fetch("/api/tracks", { cache: "no-store" })
       .then((res) => {
         if (!res.ok) throw new Error("Failed to refresh");
         return res.json();
@@ -124,9 +127,10 @@ export default function Home() {
         console.error("Failed to refresh:", err);
       })
       .finally(() => {
+        isRefreshingRef.current = false;
         setIsRefreshing(false);
       });
-  }, [isRefreshing, refreshTracks]);
+  }, [refreshTracks]);
 
   // Robust auto-refresh: combines multiple strategies to ensure the feed
   // is always updated at least every REFRESH_INTERVAL_MS (30 min), even
@@ -181,7 +185,7 @@ export default function Home() {
     if (nextOffset === null || isLoadingMore) return;
 
     setIsLoadingMore(true);
-    fetch(`/api/tracks?offset=${nextOffset}`)
+    fetch(`/api/tracks?offset=${nextOffset}`, { cache: "no-store" })
       .then((res) => {
         if (!res.ok) throw new Error("Failed to load more tracks");
         return res.json();
